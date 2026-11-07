@@ -1,5 +1,5 @@
 [server]
-address = "game.openrsc.com:43235"
+address = "127.0.0.1:43594"
 
 [ocr]
 ocr_type = "hash"
