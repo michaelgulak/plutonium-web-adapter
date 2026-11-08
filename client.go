@@ -70,6 +70,12 @@ type client struct {
 
 	script *script
 
+	// Serve mode (see serve.go). calls is nil outside serve mode, so its
+	// select case in eventLoop never fires there.
+	calls         chan *call
+	onLoaded      func()
+	loginResponse int
+
 	loading         bool
 	serverIndex     int
 	worldX          int
@@ -334,6 +340,7 @@ func main() {
 		configPath    string
 		acctFile      string
 		compilePath   string
+		serveAddr     string
 		progReport    int64
 		progReportDur time.Duration
 		autologin     bool
@@ -359,6 +366,7 @@ func main() {
 	flag.StringVar(&acctFile, "f", "", "Account file")
 	flag.StringVar(&configPath, "c", "", "Config file path")
 	flag.StringVar(&compilePath, "compile", "", "Compile script at path")
+	flag.StringVar(&serveAddr, "serve", "", "Serve the script API over HTTP on this loopback address, e.g. 127.0.0.1:8787 (no accounts are loaded from files)")
 	flag.BoolVar(&downloadRSA, "d", false, "Download RSA keys")
 	flag.BoolVar(&autologin, "l", false, "Autologin flag")
 	flag.BoolVar(&version, "v", false, "Version flag")
@@ -403,6 +411,15 @@ func main() {
 	}
 
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+	if serveAddr != "" {
+		b.checkOCR()
+		loadDefs()
+		b.world.loadWorld()
+		b.loginWaiter()
+		runServer(b, serveAddr, sigs)
+		return
+	}
 
 	go func() {
 		<-sigs
@@ -699,6 +716,8 @@ loop:
 			} else {
 				c.scriptTimer.Reset(50 * time.Millisecond)
 			}
+		case cl := <-c.calls:
+			cl.invoke(c)
 		case msg := <-c.botMessages:
 			if c.script != nil && c.script.onBotMessage != nil {
 				c.script.callOnBotMessage(msg.sender, msg.dict.Copy())
@@ -944,8 +963,6 @@ func doAccountCreations(fileStr string) {
 		password string
 		email    string
 	)
-	buf := make([]byte, 5000)
-	p := &RSCPacket{buf: buf}
 	for scanner.Scan() {
 		time.Sleep(2 * time.Second)
 
@@ -958,41 +975,15 @@ func doAccountCreations(fileStr string) {
 		password = lineSplit[1]
 		email = lineSplit[2]
 	retry:
-		conn, err := net.DialTimeout("tcp4", settings.ServerSettings.Address, connectTimeout*time.Second)
+		registerResponse, err := registerAccount(username, password, email)
 		if err != nil {
-			fmt.Printf("Error connecting in account creation: %s\n", err)
-			return
-		}
-
-		sessionPacket, err := readBytesRaw(conn, 4)
-		if err != nil {
-			fmt.Printf("Error reading session packet in account creation: %s\n", err)
-			return
-		}
-		_ = sessionPacket
-
-		p.createPacket(2)
-		p.writeBytes([]byte(username))
-		p.writeByte(10)
-		p.writeBytes(encodeCredential(password))
-		p.writeByte(10)
-		p.writeBytes([]byte(email))
-		p.writeByte(10)
-		p.finish()
-
-		if err = writePacket(conn, p); err != nil {
-			fmt.Println("Error writing packet:", err)
-			os.Exit(1)
-		}
-
-		registerResponse, err := readBytesRaw(conn, 1)
-		if err != nil {
-			conn.Close()
-			fmt.Printf("Error reading register response: %s\n", err)
+			fmt.Printf("[%s] %s\n", username, err)
+			if errors.Is(err, errRegisterConnect) {
+				return
+			}
 			continue
 		}
-		conn.Close()
-		switch registerResponse[0] {
+		switch registerResponse {
 		case 255:
 			fmt.Printf("[%s] Registration failed\n", username)
 		case 0:
@@ -1015,9 +1006,45 @@ func doAccountCreations(fileStr string) {
 		case 8:
 			fmt.Printf("[%s] Invalid username\n", username)
 		default:
-			fmt.Printf("[%s] Unknown registration response: %d\n", username, registerResponse[0])
+			fmt.Printf("[%s] Unknown registration response: %d\n", username, registerResponse)
 		}
 	}
+}
+
+var errRegisterConnect = errors.New("could not connect for account creation")
+
+// registerAccount performs one registration exchange with the game server
+// and returns its response code (0 = created). Shared by -r and serve mode.
+func registerAccount(username, password, email string) (byte, error) {
+	conn, err := net.DialTimeout("tcp4", settings.ServerSettings.Address, connectTimeout*time.Second)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %s", errRegisterConnect, err)
+	}
+	defer conn.Close()
+
+	if _, err := readBytesRaw(conn, 4); err != nil {
+		return 0, fmt.Errorf("%w: reading session packet: %s", errRegisterConnect, err)
+	}
+
+	p := &RSCPacket{buf: make([]byte, 5000)}
+	p.createPacket(2)
+	p.writeBytes([]byte(username))
+	p.writeByte(10)
+	p.writeBytes(encodeCredential(password))
+	p.writeByte(10)
+	p.writeBytes([]byte(email))
+	p.writeByte(10)
+	p.finish()
+
+	if err := writePacket(conn, p); err != nil {
+		return 0, fmt.Errorf("writing registration packet: %s", err)
+	}
+
+	resp, err := readBytesRaw(conn, 1)
+	if err != nil {
+		return 0, fmt.Errorf("reading registration response: %s", err)
+	}
+	return resp[0], nil
 }
 
 func writePacket(conn net.Conn, p *RSCPacket) error {
@@ -1199,6 +1226,7 @@ func encryptRSA(bs []byte) []byte {
 }
 
 func (c *client) login() (bool, time.Duration, error) {
+	c.loginResponse = -1
 	conn, err := net.DialTimeout("tcp4", settings.ServerSettings.Address, connectTimeout*time.Second)
 	if err != nil {
 		return false, time.Second * 15, fmt.Errorf("connection error: %s", err)
@@ -1259,6 +1287,7 @@ func (c *client) login() (bool, time.Duration, error) {
 		return false, time.Second * 15, err
 	}
 	loginResponse = loginRespBuf[0]
+	c.loginResponse = int(loginResponse)
 
 	fmt.Printf("[%s] Login response: %d\n", c.user, loginResponse)
 
@@ -2500,6 +2529,9 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 				c.script.callOnLoad()
 			}
 			c.initChans()
+			if c.onLoaded != nil {
+				c.onLoaded()
+			}
 		}
 	case 183: // can't logout response packet
 		if c.account.debug {
