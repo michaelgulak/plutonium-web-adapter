@@ -140,6 +140,7 @@ func (e *testEnv) fakeOnline(username string, opts fakeOpts) *fakeAccount {
 	}
 
 	ma := e.s.accounts.getOrCreate(key, username)
+	c.events = ma.events
 	ma.mu.Lock()
 	ma.state = stateOnline
 	ma.session = 1

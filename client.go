@@ -79,6 +79,7 @@ type client struct {
 	calls         chan *call
 	onLoaded      func()
 	loginResponse int
+	events        *eventRing // nil outside serve mode; see events.go
 
 	loading         bool
 	serverIndex     int
@@ -371,6 +372,7 @@ func main() {
 	flag.StringVar(&configPath, "c", "", "Config file path")
 	flag.StringVar(&compilePath, "compile", "", "Compile script at path")
 	flag.StringVar(&serveAddr, "serve", "", "Serve the script API over HTTP on this loopback address, e.g. 127.0.0.1:8787 (no accounts are loaded from files)")
+	flag.IntVar(&eventBufferSize, "event-buffer", eventBufferSize, "With -serve: events kept per account for streams to resume from")
 	flag.BoolVar(&downloadRSA, "d", false, "Download RSA keys")
 	flag.BoolVar(&autologin, "l", false, "Autologin flag")
 	flag.BoolVar(&version, "v", false, "Version flag")
@@ -1154,6 +1156,7 @@ func (c *client) doCaptcha(buf []byte) {
 	}
 
 	c.sendSleepWord(sleepWord)
+	c.emit("sleep_word_sent", struct{}{})
 	if c.script != nil && c.script.onSleepWordSent != nil {
 		c.script.callOnSleepWordSent()
 	}
@@ -1471,6 +1474,7 @@ func (c *client) createNPC(serverIndex, id, x, z, sprite int) *npc {
 		n.waypointNext = 0
 		n.waypointsX[n.waypointCurrent] = int16(x)
 		n.waypointsZ[n.waypointCurrent] = int16(z)
+		c.emitNPC("npc_spawned", n)
 		if c.script != nil && c.script.onNPCSpawned != nil {
 			c.script.callOnNPCSpawned(n)
 		}
@@ -1631,7 +1635,7 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 		}
 
 		var removedNPCs map[*npc]struct{}
-		if c.script != nil && c.script.onNPCDespawned != nil {
+		if (c.script != nil && c.script.onNPCDespawned != nil) || c.events != nil {
 			removedNPCs = make(map[*npc]struct{})
 		}
 
@@ -1713,9 +1717,13 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 		}
 
 		for k := range removedNPCs {
-			c.script.callOnNPCDespawned(k)
+			c.emitNPC("npc_despawned", k)
+			if c.script != nil && c.script.onNPCDespawned != nil {
+				c.script.callOnNPCDespawned(k)
+			}
 		}
 
+		c.emitServerTick()
 		if c.script != nil && c.script.onServerTick != nil {
 			c.script.callOnServerTick()
 		}
@@ -1747,6 +1755,7 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 					}
 					groundItemCount++
 				} else {
+					c.emitGroundItem("ground_item_despawned", c.groundItems[j])
 					if c.script != nil && c.script.onGroundItemDespawned != nil {
 						c.script.callOnGroundItemDespawned(c.groundItems[j])
 					}
@@ -1761,6 +1770,7 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 
 				if x2 == 0 && z2 == 0 {
 					c.unregisterGameObject(c.objects[j])
+					c.emitObject("object_despawned", c.objects[j])
 					if c.script != nil && c.script.onObjectDespawned != nil {
 						c.script.callOnObjectDespawned(c.objects[j])
 					}
@@ -1783,6 +1793,7 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 
 				if x2 == 0 && z2 == 0 {
 					c.unregisterWallObject(c.wallObjects[j])
+					c.emitWallObject("wall_object_despawned", c.wallObjects[j])
 					if c.script != nil && c.script.onWallObjectDespawned != nil {
 						c.script.callOnWallObjectDespawned(c.wallObjects[j])
 					}
@@ -1811,6 +1822,7 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 			for i := 0; i < c.objectCount; i++ {
 				if c.objects[i].x == x && c.objects[i].z == z {
 					c.unregisterGameObject(c.objects[i])
+					c.emitObject("object_despawned", c.objects[i])
 					if c.script != nil && c.script.onObjectDespawned != nil {
 						c.script.callOnObjectDespawned(c.objects[i])
 					}
@@ -1834,6 +1846,7 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 				c.objects[c.objectCount].dir = dir
 
 				c.registerGameObject(c.objects[c.objectCount])
+				c.emitObject("object_spawned", c.objects[c.objectCount])
 				if c.script != nil && c.script.onObjectSpawned != nil {
 					c.script.callOnObjectSpawned(c.objects[c.objectCount])
 				}
@@ -1853,6 +1866,7 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 				z2 := c.wallObjects[i].z - z
 				if x2 == 0 && z2 == 0 {
 					c.unregisterWallObject(c.wallObjects[i])
+					c.emitWallObject("wall_object_despawned", c.wallObjects[i])
 					if c.script != nil && c.script.onWallObjectDespawned != nil {
 						c.script.callOnWallObjectDespawned(c.wallObjects[i])
 					}
@@ -1876,6 +1890,7 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 				c.wallObjects[c.wallObjectCount].dir = dir
 
 				c.registerWallObject(c.wallObjects[c.wallObjectCount])
+				c.emitWallObject("wall_object_spawned", c.wallObjects[c.wallObjectCount])
 				if c.script != nil && c.script.onWallObjectSpawned != nil {
 					c.script.callOnWallObjectSpawned(c.wallObjects[c.wallObjectCount])
 				}
@@ -1919,6 +1934,7 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 						}
 						count++
 					} else {
+						c.emitGroundItem("ground_item_despawned", c.groundItems[i])
 						if c.script != nil && c.script.onGroundItemDespawned != nil {
 							c.script.callOnGroundItemDespawned(c.groundItems[i])
 						}
@@ -1939,6 +1955,7 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 					for i := 0; i < c.groundItemCount; i++ {
 						if c.groundItems[i].x == x && c.groundItems[i].z == z && c.groundItems[i].id == id {
 							id = -123
+							c.emitGroundItem("ground_item_despawned", c.groundItems[i])
 							if c.script != nil && c.script.onGroundItemDespawned != nil {
 								c.script.callOnGroundItemDespawned(c.groundItems[i])
 							}
@@ -1957,6 +1974,7 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 					c.groundItems[c.groundItemCount].id = id
 					c.groundItems[c.groundItemCount].x = x
 					c.groundItems[c.groundItemCount].z = z
+					c.emitGroundItem("ground_item_spawned", c.groundItems[c.groundItemCount])
 					if c.script != nil && c.script.onGroundItemSpawned != nil {
 						c.script.callOnGroundItemSpawned(c.groundItems[c.groundItemCount])
 					}
@@ -2001,6 +2019,7 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 						if c.account.debug {
 							fmt.Printf("[%s] Chat message[%d]: (%s) %s\n", c.user, updateType, player.username, message)
 						}
+						c.emitMessage("chat_message", message, player.username)
 						if c.script != nil && c.script.onChatMessage != nil {
 							c.script.callOnChatMessage(message, player.username)
 						}
@@ -2030,6 +2049,9 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 						c.currentStats[3] = currentHP
 						c.baseStats[3] = maxHP
 					}
+					if c.events != nil {
+						c.events.publish("player_damaged", map[string]any{"damage": damage, "player": playerViewOf(player)})
+					}
 					if c.script != nil && c.script.onPlayerDamaged != nil {
 						c.script.callOnPlayerDamaged(damage, player)
 					}
@@ -2039,6 +2061,9 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 				receiverServerIndex := p.readShort()
 				if player != nil {
 					if npc := c.npcsServer[receiverServerIndex]; npc != nil {
+						if c.events != nil {
+							c.events.publish("npc_projectile", map[string]any{"projectile_type": projectileType, "npc": npcViewOf(npc), "player": playerViewOf(player)})
+						}
 						if c.script != nil && c.script.onNPCProjectile != nil {
 							c.script.callOnNPCProjectile(projectileType, npc, player)
 						}
@@ -2105,6 +2130,7 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 		c.fatigue = p.readShort()
 		c.accurateFatigue = (float64(p.readShort()) / 750) * 100
 
+		c.emit("fatigue_update", map[string]any{"fatigue": c.fatigue, "accurate_fatigue": c.accurateFatigue})
 		if c.script != nil && c.script.onFatigueUpdate != nil {
 			c.script.callOnFatigueUpdate(c.fatigue, c.accurateFatigue)
 		}
@@ -2176,6 +2202,9 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 					}
 					if recipient != -1 {
 						if player := c.playersServer[recipient]; player != nil {
+							if c.events != nil {
+								c.events.publish("npc_message", map[string]any{"message": message, "npc": npcViewOf(npc), "player": playerViewOf(player)})
+							}
 							if c.script != nil && c.script.onNPCMessage != nil {
 								c.script.callOnNPCMessage(message, npc, player)
 							}
@@ -2189,6 +2218,9 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 				if npc != nil {
 					npc.currentHP = currentHP
 					npc.maxHP = maxHP
+					if c.events != nil {
+						c.events.publish("npc_damaged", map[string]any{"damage": damage, "npc": npcViewOf(npc)})
+					}
 					if c.script != nil && c.script.onNPCDamaged != nil {
 						c.script.callOnNPCDamaged(damage, npc)
 					}
@@ -2275,6 +2307,10 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 			c.optionMenu[i] = p.readString()
 		}
 		c.optionMenuVisible = true
+		if c.events != nil {
+			options := append([]string{}, c.optionMenu[:c.optionMenuCount]...)
+			c.events.publish("option_menu", map[string]any{"options": options})
+		}
 		if c.script != nil && c.script.onOptionMenu != nil {
 			c.script.callOnOptionMenu(c.optionMenu[:c.optionMenuCount])
 		}
@@ -2288,6 +2324,7 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 		if c.account.debug {
 			fmt.Printf("[%s] Private message [%s]: %s\n", c.user, playerName, message)
 		}
+		c.emitMessage("private_message", message, playerName)
 		if c.script != nil && c.script.onPrivateMessage != nil {
 			c.script.callOnPrivateMessage(message, playerName)
 		}
@@ -2449,6 +2486,7 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 			if c.account.debug {
 				fmt.Printf("[%s] Server message: %s\n", c.user, msg)
 			}
+			c.emit("server_message", map[string]any{"message": msg})
 			if c.script != nil && c.script.onServerMessage != nil {
 				c.script.callOnServerMessage(msg)
 			}
@@ -2456,6 +2494,7 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 			if c.account.debug {
 				fmt.Printf("[%s] Private message from [%s]: %s\n", c.user, senderName, msg)
 			}
+			c.emitMessage("private_message", msg, senderName)
 			if c.script != nil && c.script.onPrivateMessage != nil {
 				c.script.callOnPrivateMessage(msg, senderName)
 			}
@@ -2463,6 +2502,7 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 			if c.account.debug {
 				fmt.Printf("[%s] Quest message: %s\n", c.user, msg)
 			}
+			c.emit("server_message", map[string]any{"message": msg})
 			if c.script != nil && c.script.onServerMessage != nil {
 				c.script.callOnServerMessage(msg)
 			}
@@ -2470,6 +2510,7 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 			if c.account.debug {
 				fmt.Printf("[%s] Chat message from [%s]: %s\n", c.user, senderName, msg)
 			}
+			c.emitMessage("chat_message", msg, senderName)
 			if c.script != nil && c.script.onChatMessage != nil {
 				c.script.callOnChatMessage(msg, senderName)
 			}
@@ -2481,6 +2522,7 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 			if c.account.debug {
 				fmt.Printf("[%s] [%s] wishes to trade with you\n", c.user, senderName)
 			}
+			c.emit("trade_request", map[string]any{"from": nameViewOf(senderName)})
 			if c.script != nil && c.script.onTradeRequest != nil {
 				c.script.callOnTradeRequest(senderName)
 			}
@@ -2488,6 +2530,7 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 			if c.account.debug {
 				fmt.Printf("[%s] Inventory: %s\n", c.user, msg)
 			}
+			c.emit("server_message", map[string]any{"message": msg})
 			if c.script != nil && c.script.onServerMessage != nil {
 				c.script.callOnServerMessage(msg)
 			}
@@ -2598,6 +2641,7 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 		if c.account.debug {
 			fmt.Printf("[%s] Died\n", c.user)
 		}
+		c.emit("death", struct{}{})
 		if c.script != nil && c.script.onDeath != nil {
 			c.script.callOnDeath()
 		}
@@ -2610,6 +2654,7 @@ func (c *client) handlePacket(p *RSCPacket, opcode, length int) {
 	case 52: // system update
 		c.systemUpdate = true
 		seconds := int(float64(p.readShort()) / 50 * 32)
+		c.emit("system_update", map[string]any{"seconds": seconds})
 		if c.script != nil && c.script.onSystemUpdate != nil {
 			c.script.callOnSystemUpdate(seconds)
 		}

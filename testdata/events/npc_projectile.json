@@ -1,0 +1,20 @@
+{
+  "npc": {
+    "ref": "npc/412:id=65",
+    "id": 65,
+    "x": 130,
+    "z": 512,
+    "hp": 20,
+    "max_hp": 20
+  },
+  "player": {
+    "ref": "player/some_guy",
+    "username": "Some Guy",
+    "x": 131,
+    "z": 512,
+    "hp": 10,
+    "max_hp": 10,
+    "combat_level": 3
+  },
+  "projectile_type": 1
+}

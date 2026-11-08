@@ -153,7 +153,19 @@ func TestLiveServeMode(t *testing.T) {
 	if status, body := l.call("POST", "/v1/accounts/"+strings.ToUpper(strings.ReplaceAll(user, " ", "%20"))+"/login", fmt.Sprintf(`{"password":%q}`, pass)); status != 202 {
 		t.Fatalf("login: %d %v", status, body)
 	}
+	// Last-Event-ID 0 replays the ring, so nothing since the login is missed.
+	events := openSSE(t, l.base+"/v1/accounts/"+key+"/events", "0")
 	first := l.waitState(key, stateOnline, 60*time.Second)
+
+	// Loading the world spawns the scenery around the player, then the
+	// session goes online.
+	spawn := events.waitFor("object_spawned", 30*time.Second, nil).json(t)
+	if ref, _ := spawn["object"].(map[string]any)["ref"].(string); !strings.HasPrefix(ref, "object/") {
+		t.Fatalf("object_spawned payload: %v", spawn)
+	}
+	events.waitFor(evSession, 30*time.Second, func(d map[string]any) bool {
+		return d["state"] == string(stateOnline) && d["session"] == first["session"]
+	})
 
 	for _, fn := range []string{"get_x", "get_z"} {
 		status, body := l.call("GET", "/v1/accounts/"+key+"/fn/"+fn, "")
@@ -193,10 +205,22 @@ func TestLiveServeMode(t *testing.T) {
 		t.Fatalf("session went %v -> %v, want +1", first["session"], second["session"])
 	}
 
-	// SIGTERM logs everyone out and exits cleanly.
+	events.waitFor(evSession, 30*time.Second, func(d map[string]any) bool {
+		return d["state"] == string(stateOnline) && d["session"] == second["session"]
+	})
+
+	// SIGTERM sends kill_signal to the listening brain, which logs out
+	// itself; then the process exits cleanly.
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
+	events.waitFor("kill_signal", 10*time.Second, nil)
+	if status, _ := l.call("POST", "/v1/accounts/"+key+"/logout", ""); status != 202 {
+		t.Fatalf("logout after kill_signal: %d", status)
+	}
+	events.waitFor(evSession, 30*time.Second, func(d map[string]any) bool {
+		return d["state"] == string(stateStopped)
+	})
 	select {
 	case err := <-exited:
 		if err != nil {
