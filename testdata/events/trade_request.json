@@ -1,0 +1,6 @@
+{
+  "from": {
+    "ref": "player/some_guy",
+    "username": "Some Guy"
+  }
+}

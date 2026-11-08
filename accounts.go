@@ -82,6 +82,7 @@ type managedAccount struct {
 	stop      chan struct{} // closed to request logout of the current run
 	done      chan struct{} // closed when the current run's goroutine exits
 	acct      *account
+	events    *eventRing // lives as long as the account, across relogins
 }
 
 // accountView is the JSON shape of an account.
@@ -107,7 +108,17 @@ func (ma *managedAccount) view() accountView {
 	}
 }
 
-// setState records a transition and logs it. Callers must hold ma.mu.
+// sessionEvent is the payload of the adapter's session event, published on
+// every state transition. Its session number tells the brain which login
+// the events that follow belong to.
+type sessionEvent struct {
+	State   accountState `json:"state"`
+	Reason  string       `json:"reason,omitempty"`
+	Session int          `json:"session"`
+}
+
+// setState records a transition, logs it and publishes a session event.
+// Callers must hold ma.mu.
 func (ma *managedAccount) setStateLocked(state accountState, reason string) {
 	ma.state = state
 	ma.reason = reason
@@ -116,6 +127,9 @@ func (ma *managedAccount) setStateLocked(state accountState, reason string) {
 		fmt.Printf("[%s] state -> %s (%s)\n", ma.key, state, reason)
 	} else {
 		fmt.Printf("[%s] state -> %s\n", ma.key, state)
+	}
+	if ma.events != nil {
+		ma.events.publish(evSession, sessionEvent{State: state, Reason: reason, Session: ma.session})
 	}
 }
 
@@ -186,6 +200,7 @@ func (r *registry) getOrCreate(key, username string) *managedAccount {
 		username: username,
 		state:    stateStopped,
 		since:    time.Now(),
+		events:   newEventRing(eventBufferSize),
 	}
 	r.accounts[key] = ma
 	return ma
@@ -255,6 +270,7 @@ func (b *bot) runSession(ma *managedAccount) {
 			scriptStopSignal: make(chan struct{}, 1),
 			scriptDCSignal:   make(chan int, 1),
 			calls:            make(chan *call),
+			events:           ma.events,
 		}
 		c.onLoaded = func() {
 			ma.mu.Lock()
@@ -262,7 +278,6 @@ func (b *bot) runSession(ma *managedAccount) {
 			if ma.stopRequested() {
 				return // logout arrived while loading; stay stopping
 			}
-			ma.session++
 			ma.client = c
 			ma.setStateLocked(stateOnline, "")
 		}
@@ -297,7 +312,9 @@ func (b *bot) runSession(ma *managedAccount) {
 		}
 
 		// Publish the live connection and check for a logout under the same
-		// lock, so a logout request can't slip between the two.
+		// lock, so a logout request can't slip between the two. The session
+		// starts here, before the world loads, so the spawn events sent
+		// while loading already carry the new session number.
 		ma.mu.Lock()
 		if ma.stopRequested() {
 			ma.mu.Unlock()
@@ -307,6 +324,8 @@ func (b *bot) runSession(ma *managedAccount) {
 			return
 		}
 		ma.live = c
+		ma.session++
+		ma.setStateLocked(stateLoggingIn, "loading")
 		ma.mu.Unlock()
 
 		c.init()

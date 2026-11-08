@@ -24,16 +24,21 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 const (
 	apiTokenEnv      = "PLUTONIUM_API_TOKEN"
 	maxBodyBytes     = 64 << 10
-	shutdownGrace    = 15 * time.Second
 	registerSpacing  = 2 * time.Second
 	registerCooldown = 5 * time.Minute
 )
+
+// How long SIGTERM waits, after sending kill_signal, for the brain to log
+// its accounts out itself; plutonium gives scripts the same 15 seconds. A
+// variable so tests can shorten it.
+var killGrace = 15 * time.Second
 
 type server struct {
 	bot      *bot
@@ -42,6 +47,9 @@ type server struct {
 
 	registerMu   sync.Mutex
 	lastRegister time.Time
+
+	stopping atomic.Bool   // set on SIGTERM: no new logins
+	closing  chan struct{} // closed at the end of shutdown: event streams end
 }
 
 // apiError is the single error envelope:
@@ -138,7 +146,7 @@ func runServer(b *bot, addr string, sigs <-chan os.Signal) {
 }
 
 func newServer(b *bot, token string) *server {
-	return &server{bot: b, accounts: newRegistry(), token: token}
+	return &server{bot: b, accounts: newRegistry(), token: token, closing: make(chan struct{})}
 }
 
 // handler returns the full HTTP handler: routes behind the token check.
@@ -149,6 +157,7 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("GET /v1/accounts/{account}", s.handleGetAccount)
 	mux.HandleFunc("POST /v1/accounts/{account}/login", s.handleLogin)
 	mux.HandleFunc("POST /v1/accounts/{account}/logout", s.handleLogout)
+	mux.HandleFunc("GET /v1/accounts/{account}/events", s.handleEvents)
 	mux.HandleFunc("GET /v1/accounts/{account}/fn/{function}", s.handleFn)
 	mux.HandleFunc("POST /v1/accounts/{account}/fn/{function}", s.handleFn)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -165,31 +174,67 @@ func badUsername() *apiError {
 	}
 }
 
+// shutdown is the serve-mode counterpart of on_kill_signal. The HTTP server
+// keeps running throughout, because the brain needs it to log out:
+//
+//  1. refuse new logins;
+//  2. send kill_signal to every running account, and if anyone is
+//     listening, give the brain killGrace to log them out itself;
+//  3. log out whatever is still running, closing sockets after logoutGrace;
+//  4. end the event streams and stop the HTTP server.
 func (s *server) shutdown(httpServer *http.Server) {
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
-	defer cancel()
-
-	// Stop taking new requests first, so nothing logs back in mid-shutdown.
-	_ = httpServer.Shutdown(ctx)
+	s.stopping.Store(true)
 
 	var runs []chan struct{}
+	listened := false
 	for _, ma := range s.accounts.all() {
 		ma.mu.Lock()
-		done := ma.done
+		done, state := ma.done, ma.state
 		ma.mu.Unlock()
-		if done != nil {
-			runs = append(runs, done)
+		if done == nil || state == stateStopped || state == stateLoginFailed {
+			continue
 		}
+		runs = append(runs, done)
+		ma.events.publish("kill_signal", killSignalPayload())
+		if ma.events.readers.Load() > 0 {
+			listened = true
+		}
+	}
+	if listened {
+		fmt.Printf("[BOT] Waiting up to %s for the brain to log accounts out\n", killGrace)
+		waitAll(runs, killGrace)
+	}
+
+	for _, ma := range s.accounts.all() {
 		s.requestLogout(ma)
 	}
-	for _, done := range runs {
-		select {
-		case <-done:
-		case <-ctx.Done():
-		}
-	}
+	waitAll(runs, logoutGrace+2*time.Second)
+
+	close(s.closing)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = httpServer.Shutdown(ctx)
+
 	close(s.bot.closing)
 	fmt.Println("[BOT] Shut down")
+}
+
+// killSignalPayload is the kill_signal event: how long the brain has.
+func killSignalPayload() map[string]any {
+	return map[string]any{"seconds": int(killGrace.Seconds())}
+}
+
+// waitAll waits until every channel is closed or d has passed.
+func waitAll(chans []chan struct{}, d time.Duration) {
+	deadline := time.NewTimer(d)
+	defer deadline.Stop()
+	for _, ch := range chans {
+		select {
+		case <-ch:
+		case <-deadline.C:
+			return
+		}
+	}
 }
 
 // auth enforces the optional bearer token from PLUTONIUM_API_TOKEN.
@@ -341,6 +386,10 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Password == "" {
 		writeError(w, &apiError{status: http.StatusBadRequest, code: "bad_argument", message: "password is required"})
+		return
+	}
+	if s.stopping.Load() {
+		writeError(w, &apiError{status: http.StatusServiceUnavailable, code: "shutting_down", message: "the adapter is shutting down"})
 		return
 	}
 

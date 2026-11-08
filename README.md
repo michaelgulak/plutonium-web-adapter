@@ -7,9 +7,10 @@ This is `plutonium-web-adapter`, a fork of [plutonium](https://gitlab.com/openrs
 ### Testing
 
 ```bash
-go test -race ./...                                  # always: unit and HTTP component tests, no game server needed
+go test -race ./...                                  # always: unit, HTTP component and fake-game-server tests, no real game server needed
 go test -race -tags integration -run Live ./...      # opt-in: live test against the local OpenRSC server
 go test -run '^$' -fuzz FuzzAccountKeyMatchesServer -fuzztime 30s .   # occasional: fuzz account keys against the server's username hash
+go test -run Golden -update ./...                    # after an intended JSON shape change: rewrite testdata/, then review the diff
 ```
 
 The live test needs the game server running on `127.0.0.1:43594` and reuses one test account (`Fellow Tst1` by default; override with `PLUTONIUM_IT_USER`, `PLUTONIUM_IT_PASS`, `PLUTONIUM_IT_GAME`). The race detector matters here: serve mode relies on only each account's event loop touching that account's game state.

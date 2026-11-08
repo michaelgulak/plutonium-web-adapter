@@ -1,0 +1,12 @@
+{
+  "damage": 3,
+  "player": {
+    "ref": "player/some_guy",
+    "username": "Some Guy",
+    "x": 131,
+    "z": 512,
+    "hp": 7,
+    "max_hp": 10,
+    "combat_level": 3
+  }
+}
