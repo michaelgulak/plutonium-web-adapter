@@ -1,3 +1,13 @@
+# Plutonium (fellowship fork)
+
+This is `plutonium-web-adapter`, a fork of [plutonium](https://gitlab.com/openrsc/plutonium) for Project Fellowship. It adds a serve mode (`-serve`) that exposes plutonium's script API over JSON REST, so an external program can drive accounts with no Python script involved.
+
+**About the code in this fork:** the changes this fork makes on top of upstream — serve mode, the HTTP adapter, and related edits — are almost entirely AI-generated, written with [Claude Code](https://claude.com/claude-code) under the repository owner's direction and review. The plutonium client itself (protocol, pathfinding, scripting engine) is upstream's work and is unchanged apart from small hooks the adapter needs. Use `git log` against upstream to see exactly which parts are which.
+
+The rest of this README is upstream's and describes plutonium itself.
+
+---
+
 # Plutonium
 
 Plutonium is a lightweight shell bot written for the [OpenRSC](https://rsc.vet/) Uranium server that runs on at least Linux, Windows, and MacOS. A shell bot is a bot that runs without any graphics and thus has a much smaller memory and cpu footprint than other bots. A Plutonium process running 10 accounts uses around 25-30mb memory. Plutonium also makes it easy to run several accounts at once with a single command, and doesn't have the inherent memory leaks of traditional RSC clients - meaning it can run for years on a stable box. 
@@ -79,7 +89,7 @@ If you want progress report files to be overwritten every time they're generated
 
 ## Building Plutonium
 
-Make sure you have at least version 1.21 of [Go](https://go.dev/) installed, along with [git](https://git-scm.com/). On Linux open a terminal, or on Windows open a command prompt. Then clone this repo with 
+Make sure you have at least version 1.22 of [Go](https://go.dev/) installed, along with [git](https://git-scm.com/). On Linux open a terminal, or on Windows open a command prompt. Then clone this repo with 
 
 ```bash
 git clone https://gitlab.com/openrsc/plutonium
