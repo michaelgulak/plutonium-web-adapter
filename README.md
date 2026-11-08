@@ -4,6 +4,16 @@ This is `plutonium-web-adapter`, a fork of [plutonium](https://gitlab.com/openrs
 
 **About the code in this fork:** the changes this fork makes on top of upstream — serve mode, the HTTP adapter, and related edits — are almost entirely AI-generated, written with [Claude Code](https://claude.com/claude-code) under the repository owner's direction and review. The plutonium client itself (protocol, pathfinding, scripting engine) is upstream's work and is unchanged apart from small hooks the adapter needs. Use `git log` against upstream to see exactly which parts are which.
 
+### Testing
+
+```bash
+go test -race ./...                                  # always: unit and HTTP component tests, no game server needed
+go test -race -tags integration -run Live ./...      # opt-in: live test against the local OpenRSC server
+go test -run '^$' -fuzz FuzzAccountKeyMatchesServer -fuzztime 30s .   # occasional: fuzz account keys against the server's username hash
+```
+
+The live test needs the game server running on `127.0.0.1:43594` and reuses one test account (`Fellow Tst1` by default; override with `PLUTONIUM_IT_USER`, `PLUTONIUM_IT_PASS`, `PLUTONIUM_IT_GAME`). The race detector matters here: serve mode relies on only each account's event loop touching that account's game state.
+
 The rest of this README is upstream's and describes plutonium itself.
 
 ---

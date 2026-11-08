@@ -18,7 +18,9 @@ import (
 	"time"
 )
 
-const callTimeout = 10 * time.Second
+// How long a call waits for the account's event loop. A variable so tests
+// can shorten it.
+var callTimeout = 10 * time.Second
 
 type callResult struct {
 	value any

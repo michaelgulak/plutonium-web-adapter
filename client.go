@@ -35,6 +35,10 @@ const (
 	botVersion       = "1.12.7"
 )
 
+// Gap between logins across all accounts, so the server isn't spammed.
+// A variable so tests can shorten it.
+var loginStagger = 6 * time.Second
+
 var (
 	tileDefs   []*tileDef
 	doorDefs   []*doorDef
@@ -502,7 +506,7 @@ func (b *bot) loginWaiter() {
 	go func() {
 		for {
 			<-b.loginWait
-			time.Sleep(6 * time.Second)
+			time.Sleep(loginStagger)
 		}
 	}()
 }
