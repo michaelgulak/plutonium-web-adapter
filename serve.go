@@ -111,23 +111,11 @@ func runServer(b *bot, addr string, sigs <-chan os.Signal) {
 		os.Exit(1)
 	}
 
-	s := &server{bot: b, accounts: newRegistry(), token: os.Getenv(apiTokenEnv)}
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/accounts", s.handleRegister)
-	mux.HandleFunc("GET /v1/accounts", s.handleListAccounts)
-	mux.HandleFunc("GET /v1/accounts/{account}", s.handleGetAccount)
-	mux.HandleFunc("POST /v1/accounts/{account}/login", s.handleLogin)
-	mux.HandleFunc("POST /v1/accounts/{account}/logout", s.handleLogout)
-	mux.HandleFunc("GET /v1/accounts/{account}/fn/{function}", s.handleFn)
-	mux.HandleFunc("POST /v1/accounts/{account}/fn/{function}", s.handleFn)
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, &apiError{status: http.StatusNotFound, code: "not_found", message: "no such route"})
-	})
+	s := newServer(b, os.Getenv(apiTokenEnv))
 
 	httpServer := &http.Server{
 		Addr:              addr,
-		Handler:           s.auth(mux),
+		Handler:           s.handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -147,6 +135,26 @@ func runServer(b *bot, addr string, sigs <-chan os.Signal) {
 	<-sigs
 	fmt.Println("[BOT] Received kill signal, logging accounts out")
 	s.shutdown(httpServer)
+}
+
+func newServer(b *bot, token string) *server {
+	return &server{bot: b, accounts: newRegistry(), token: token}
+}
+
+// handler returns the full HTTP handler: routes behind the token check.
+func (s *server) handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/accounts", s.handleRegister)
+	mux.HandleFunc("GET /v1/accounts", s.handleListAccounts)
+	mux.HandleFunc("GET /v1/accounts/{account}", s.handleGetAccount)
+	mux.HandleFunc("POST /v1/accounts/{account}/login", s.handleLogin)
+	mux.HandleFunc("POST /v1/accounts/{account}/logout", s.handleLogout)
+	mux.HandleFunc("GET /v1/accounts/{account}/fn/{function}", s.handleFn)
+	mux.HandleFunc("POST /v1/accounts/{account}/fn/{function}", s.handleFn)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, &apiError{status: http.StatusNotFound, code: "not_found", message: "no such route"})
+	})
+	return s.auth(mux)
 }
 
 func badUsername() *apiError {
@@ -253,30 +261,40 @@ func (s *server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	view := map[string]any{"key": key, "username": req.Username}
+	if err := registrationError(code, view); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, view)
+}
+
+// registrationError maps a game-server registration response code to the
+// API error for it, or nil for 0 (created).
+func registrationError(code byte, view map[string]any) *apiError {
 	switch code {
 	case 0:
-		writeJSON(w, http.StatusCreated, view)
+		return nil
 	case 2:
-		writeError(w, &apiError{status: http.StatusConflict, code: "username_taken", message: "username already taken", extra: view})
+		return &apiError{status: http.StatusConflict, code: "username_taken", message: "username already taken", extra: view}
 	case 3:
-		writeError(w, &apiError{status: http.StatusConflict, code: "email_in_use", message: "email already in use"})
+		return &apiError{status: http.StatusConflict, code: "email_in_use", message: "email already in use"}
 	case 4:
-		writeError(w, &apiError{status: http.StatusForbidden, code: "registration_disabled", message: "registration is disabled on the game server"})
+		return &apiError{status: http.StatusForbidden, code: "registration_disabled", message: "registration is disabled on the game server"}
 	case 5:
-		writeError(w, &apiError{
+		return &apiError{
 			status:  http.StatusTooManyRequests,
 			code:    "registered_too_recently",
 			message: "the game server rate-limits registration",
 			header:  map[string]string{"Retry-After": strconv.Itoa(int(registerCooldown.Seconds()))},
-		})
+		}
 	case 6:
-		writeError(w, &apiError{status: http.StatusBadRequest, code: "bad_email", message: "invalid email address"})
+		return &apiError{status: http.StatusBadRequest, code: "bad_email", message: "invalid email address"}
 	case 7:
-		writeError(w, &apiError{status: http.StatusBadRequest, code: "bad_username", message: "username must be 2-12 characters long"})
+		return &apiError{status: http.StatusBadRequest, code: "bad_username", message: "username must be 2-12 characters long"}
 	case 8:
-		writeError(w, &apiError{status: http.StatusBadRequest, code: "bad_username", message: "invalid username"})
+		return &apiError{status: http.StatusBadRequest, code: "bad_username", message: "invalid username"}
 	default:
-		writeError(w, &apiError{status: http.StatusBadGateway, code: "registration_failed", message: fmt.Sprintf("game server registration response %d", code)})
+		return &apiError{status: http.StatusBadGateway, code: "registration_failed", message: fmt.Sprintf("game server registration response %d", code)}
 	}
 }
 

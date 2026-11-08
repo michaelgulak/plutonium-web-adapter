@@ -25,11 +25,10 @@ const (
 	stateStopped      accountState = "stopped"
 )
 
-const (
-	// How long a requested logout waits for the server to drop the
-	// connection (it refuses while in combat) before closing the socket.
-	logoutGrace = 10 * time.Second
-)
+// How long a requested logout waits for the server to drop the connection
+// (it refuses right after login and while in combat) before closing the
+// socket. A variable so tests can shorten it.
+var logoutGrace = 10 * time.Second
 
 const maxKeyLength = 12
 
