@@ -1,0 +1,9 @@
+{
+  "error": {
+    "code": "account_offline",
+    "message": "account is not online",
+    "reason": "relogin pending",
+    "state": "disconnected"
+  }
+}
+

@@ -461,8 +461,9 @@ func init() {
 				if err != nil {
 					return nil, err
 				}
-				if index < 0 || index >= len(c.optionMenu) {
-					return nil, badArg("index", fmt.Sprintf("must be 0 to %d", len(c.optionMenu)-1))
+				// Against the options the last menu offered, not the array that holds them.
+				if index < 0 || index >= c.optionMenuCount {
+					return nil, badArg("index", fmt.Sprintf("must be 0 to %d, the last menu's options", c.optionMenuCount-1))
 				}
 				c.answer(index)
 				return nil, nil

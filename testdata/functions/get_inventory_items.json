@@ -1,0 +1,27 @@
+{
+  "result": [
+    {
+      "ref": "inv/0",
+      "id": 87,
+      "amount": 1,
+      "equipped": true,
+      "slot": 0
+    },
+    {
+      "ref": "inv/1",
+      "id": 14,
+      "amount": 1,
+      "equipped": false,
+      "slot": 1
+    },
+    {
+      "ref": "inv/2",
+      "id": 1263,
+      "amount": 1,
+      "equipped": false,
+      "slot": 2
+    }
+  ],
+  "session": 1
+}
+

@@ -1,0 +1,8 @@
+{
+  "error": {
+    "argument": "x",
+    "code": "bad_argument",
+    "message": "x: is not a world coordinate"
+  }
+}
+

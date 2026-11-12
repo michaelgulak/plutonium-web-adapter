@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "entity_gone",
+    "message": "npc/13:id=95 is no longer there",
+    "ref": "npc/13:id=95"
+  }
+}
+

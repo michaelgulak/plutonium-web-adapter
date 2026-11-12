@@ -146,6 +146,119 @@ func firstName(evs []event) string {
 	return evs[0].name
 }
 
+// --- call responses -------------------------------------------------------------
+
+// goldenScene gives a fake client something for every query to report: a
+// position and fatigue, a tree and a stump, an axe, a log and a sleeping bag,
+// a banker in view with the banker's menu showing.
+func goldenScene(c *client) {
+	c.x, c.z = 220, 634
+	c.fatigue = 37
+	for i, o := range []*object{{id: 1, x: 218, z: 630}, {id: 4, x: 219, z: 630}} {
+		c.objects[i] = o
+	}
+	c.objectCount = 2
+	for i, it := range []*item{{id: 87, amount: 1, equipped: true}, {id: 14, amount: 1}, {id: 1263, amount: 1}} {
+		it.slot = i
+		c.inventory[i] = it
+	}
+	c.inventoryCount = 3
+	c.npcs[0] = &npc{id: 95, serverIndex: 12, x: 220, z: 636, currentHP: 1, maxHP: 1}
+	c.npcCount = 1
+	c.optionMenu[0] = "I'd like to access my bank account please"
+	c.optionMenu[1] = "What is this place?"
+	c.optionMenuCount = 2
+	c.optionMenuVisible = true
+}
+
+// callScenario is one request whose exact response is pinned.
+type callScenario struct{ method, body string }
+
+// callScenarios answer each served function once against goldenScene, named
+// after the function, plus the error envelopes the brain acts on.
+var callScenarios = map[string]callScenario{
+	"get_x":               {"GET", ""},
+	"get_z":               {"GET", ""},
+	"get_fatigue":         {"GET", ""},
+	"get_objects":         {"GET", ""},
+	"get_inventory_items": {"GET", ""},
+	"get_empty_slots":     {"GET", ""},
+	"get_npcs":            {"GET", ""},
+	"is_option_menu":      {"GET", ""},
+	"get_option_menu":     {"GET", ""},
+	"is_bank_open":        {"GET", ""},
+	"is_sleeping":         {"GET", ""},
+	"send_chat_message":   {"POST", `{"message":"hello"}`},
+	"answer":              {"POST", `{"index":0}`},
+	"deposit":             {"POST", `{"id":14,"amount":1}`},
+	"close_bank":          {"POST", `{}`},
+	"use_sleeping_bag":    {"POST", `{}`},
+}
+
+// Functions whose success needs the pathfinder, which needs the landscape
+// archive these tests don't load; their gone answers are pinned instead, and
+// the live suite covers their success.
+var pathfindingFunctions = map[string]callScenario{
+	"walk_path_to": {"POST", `{"x":-1,"z":0}`}, // a bad_argument: the call shape, without walking
+	"at_object":    {"POST", `{"object":"object/1@170,640"}`},
+	"talk_to_npc":  {"POST", `{"npc":"npc/13:id=95"}`},
+}
+
+func TestGoldenCallResponses(t *testing.T) {
+	e := newTestEnv(t, "")
+	e.fakeOnline("fellow", fakeOpts{setup: goldenScene})
+
+	run := func(file, name string, sc callScenario) {
+		t.Run(name, func(t *testing.T) {
+			_, raw := e.raw(sc.method, "/v1/accounts/fellow/fn/"+name, sc.body)
+			golden(t, file, raw)
+		})
+	}
+	// Queries first: the actions change the scene (answer closes the menu).
+	names := make([]string, 0, len(callScenarios))
+	for name := range callScenarios {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		qi, qj := callScenarios[names[i]].method == "GET", callScenarios[names[j]].method == "GET"
+		if qi != qj {
+			return qi
+		}
+		return names[i] < names[j]
+	})
+	for _, name := range names {
+		run("functions/"+name+".json", name, callScenarios[name])
+	}
+	for name, sc := range pathfindingFunctions {
+		run("functions/"+name+".error.json", name, sc)
+	}
+
+	t.Run("account_offline", func(t *testing.T) {
+		e := newTestEnv(t, "")
+		fa := e.fakeOnline("fellow", fakeOpts{})
+		fa.ma.setState(stateDisconnected, "relogin pending")
+		_, raw := e.raw("GET", "/v1/accounts/fellow/fn/get_x", "")
+		golden(t, "errors/account_offline.json", raw)
+	})
+}
+
+// Every served function has a golden scenario, so a new one can't ship
+// without its response pinned.
+func TestGoldenCoversEveryFunction(t *testing.T) {
+	var missing []string
+	for name := range functions {
+		_, ok := callScenarios[name]
+		_, pathfinding := pathfindingFunctions[name]
+		if !ok && !pathfinding && name != "test_panic" {
+			missing = append(missing, name)
+		}
+	}
+	sort.Strings(missing)
+	if len(missing) > 0 {
+		t.Fatalf("functions with no golden scenario: %v", missing)
+	}
+}
+
 // Every streamed event has a golden scenario, so a new hook can't ship
 // without its payload pinned. server_tick is built inline by the stream
 // (it isn't in the ring) and is covered by TestEventsFilterTicksAndSessions.

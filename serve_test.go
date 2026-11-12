@@ -47,6 +47,19 @@ func (r response) errCode() string {
 
 func (e *testEnv) do(method, path, body string, header ...string) response {
 	e.t.Helper()
+	resp, raw := e.raw(method, path, body, header...)
+	out := response{status: resp.StatusCode, header: resp.Header, body: map[string]any{}}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &out.body); err != nil {
+			e.t.Fatalf("%s %s: response is not a JSON object: %s", method, path, raw)
+		}
+	}
+	return out
+}
+
+// raw sends a request and returns the response with its body exactly as sent.
+func (e *testEnv) raw(method, path, body string, header ...string) (*http.Response, []byte) {
+	e.t.Helper()
 	req, err := http.NewRequest(method, e.ts.URL+path, strings.NewReader(body))
 	if err != nil {
 		e.t.Fatal(err)
@@ -60,13 +73,7 @@ func (e *testEnv) do(method, path, body string, header ...string) response {
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
-	out := response{status: resp.StatusCode, header: resp.Header, body: map[string]any{}}
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &out.body); err != nil {
-			e.t.Fatalf("%s %s: response is not a JSON object: %s", method, path, raw)
-		}
-	}
-	return out
+	return resp, raw
 }
 
 // want fails unless the response has the given status and (if non-empty)
@@ -396,6 +403,7 @@ func TestBankingArgumentsAndGoneNPC(t *testing.T) {
 	}
 	e.do("POST", "/v1/accounts/fellow/fn/answer", `{"index":-1}`).want(t, 400, "bad_argument")
 	e.do("POST", "/v1/accounts/fellow/fn/answer", `{"index":20}`).want(t, 400, "bad_argument")
+	e.do("POST", "/v1/accounts/fellow/fn/answer", `{"index":2}`).want(t, 400, "bad_argument") // the menu has two options
 	e.do("POST", "/v1/accounts/fellow/fn/deposit", `{"id":14,"amount":0}`).want(t, 400, "bad_argument")
 	e.do("POST", "/v1/accounts/fellow/fn/deposit", `{"id":70000,"amount":1}`).want(t, 400, "bad_argument")
 	e.do("POST", "/v1/accounts/fellow/fn/deposit", `{"id":14}`).want(t, 400, "bad_argument")
