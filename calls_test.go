@@ -79,6 +79,44 @@ func TestFnArgsTypes(t *testing.T) {
 	wantAPIError(t, err, http.StatusBadRequest, "bad_argument")
 }
 
+func TestParseObjectRef(t *testing.T) {
+	id, x, z, err := parseObjectRef("object", "object/1@170,640")
+	if err != nil || id != 1 || x != 170 || z != 640 {
+		t.Fatalf("got %d %d %d %v", id, x, z, err)
+	}
+	for _, ref := range []string{
+		"", "object/1", "object/1@170", "npc/1@170,640", "object/a@170,640",
+		"object/1@170,640,2", "object/01@170,640", "object/1@+170,640", " object/1@170,640",
+	} {
+		_, _, _, err := parseObjectRef("object", ref)
+		wantAPIError(t, err, http.StatusBadRequest, "bad_argument")
+	}
+}
+
+func TestParseNPCRef(t *testing.T) {
+	index, id, err := parseNPCRef("npc", "npc/412:id=65")
+	if err != nil || index != 412 || id != 65 {
+		t.Fatalf("got %d %d %v", index, id, err)
+	}
+	for _, ref := range []string{
+		"", "npc/412", "npc/412:65", "npc/412:id=", "object/412:id=65", "npc/a:id=65",
+		"npc/0412:id=65", "npc/412:id=+65", " npc/412:id=65", "npc/412:id=65:x",
+	} {
+		_, _, err := parseNPCRef("npc", ref)
+		wantAPIError(t, err, http.StatusBadRequest, "bad_argument")
+	}
+}
+
+func TestCoordinateArgument(t *testing.T) {
+	if n, err := bodyArgs(t, `{"x":167}`).coordinate("x"); err != nil || n != 167 {
+		t.Fatalf("got %d, %v", n, err)
+	}
+	for _, js := range []string{`{"x":-1}`, `{"x":40000}`, `{"x":1.5}`} {
+		_, err := bodyArgs(t, js).coordinate("x")
+		wantAPIError(t, err, http.StatusBadRequest, "bad_argument")
+	}
+}
+
 func TestCallInvokeRecoversPanic(t *testing.T) {
 	cl := &call{
 		fn:    func(c *client) (any, error) { panic("boom") },

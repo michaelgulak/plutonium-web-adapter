@@ -180,6 +180,27 @@ func TestLiveServeMode(t *testing.T) {
 		t.Fatalf("send_chat_message: %d %v", status, body)
 	}
 
+	// The scenery that loaded is visible, with refs; the inventory and its
+	// free slots add up to 30.
+	if status, body := l.call("GET", "/v1/accounts/"+key+"/fn/get_objects", ""); status != 200 {
+		t.Fatalf("get_objects: %d %v", status, body)
+	} else if objects, _ := body["result"].([]any); len(objects) == 0 || !strings.HasPrefix(objects[0].(map[string]any)["ref"].(string), "object/") {
+		t.Fatalf("get_objects returned %v, want the scenery around the player", body["result"])
+	}
+	_, items := l.call("GET", "/v1/accounts/"+key+"/fn/get_inventory_items", "")
+	_, empty := l.call("GET", "/v1/accounts/"+key+"/fn/get_empty_slots", "")
+	if list, ok := items["result"].([]any); !ok || len(list)+int(empty["result"].(float64)) != 30 {
+		t.Fatalf("get_inventory_items %v and get_empty_slots %v don't add up to 30", items, empty)
+	}
+
+	// A one-tile walk finds a path and sends the walk packet.
+	_, x := l.call("GET", "/v1/accounts/"+key+"/fn/get_x", "")
+	_, z := l.call("GET", "/v1/accounts/"+key+"/fn/get_z", "")
+	walk := fmt.Sprintf(`{"x":%d,"z":%d}`, int(x["result"].(float64))+1, int(z["result"].(float64)))
+	if status, body := l.call("POST", "/v1/accounts/"+key+"/fn/walk_path_to", walk); status != 200 || body["result"] != true {
+		t.Fatalf("walk_path_to %s: %d %v", walk, status, body)
+	}
+
 	// Logout ends in stopped, even when the server refuses the logout packet
 	// (it does right after login) and the grace close has to step in.
 	if status, _ := l.call("POST", "/v1/accounts/"+key+"/logout", ""); status != 202 {

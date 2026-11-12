@@ -222,6 +222,183 @@ func TestActionSendsPacket(t *testing.T) {
 	}
 }
 
+// withScene gives a fake client a tree and a stump in view, and an axe and
+// two logs in its inventory.
+func withScene(c *client) {
+	c.x, c.z = 170, 641
+	for i, o := range []*object{{id: 1, x: 170, z: 640}, {id: 4, x: 172, z: 640}} {
+		c.objects[i] = o
+	}
+	c.objectCount = 2
+	for i, it := range []*item{{id: 87, amount: 1, equipped: true}, {id: 14, amount: 1}, {id: 14, amount: 1}} {
+		it.slot = i
+		c.inventory[i] = it
+	}
+	c.inventoryCount = 3
+}
+
+func TestObjectsAndInventoryQueries(t *testing.T) {
+	e := newTestEnv(t, "")
+	e.fakeOnline("fellow", fakeOpts{setup: withScene})
+
+	r := e.do("GET", "/v1/accounts/fellow/fn/get_objects", "")
+	r.want(t, 200, "")
+	objects := r.body["result"].([]any)
+	if len(objects) != 2 || objects[0].(map[string]any)["ref"] != "object/1@170,640" || objects[1].(map[string]any)["id"] != float64(4) {
+		t.Fatalf("get_objects: %v", r.body)
+	}
+
+	r = e.do("GET", "/v1/accounts/fellow/fn/get_inventory_items", "")
+	r.want(t, 200, "")
+	items := r.body["result"].([]any)
+	axe := items[0].(map[string]any)
+	if len(items) != 3 || axe["ref"] != "inv/0" || axe["id"] != float64(87) || axe["equipped"] != true || items[2].(map[string]any)["slot"] != float64(2) {
+		t.Fatalf("get_inventory_items: %v", r.body)
+	}
+
+	r = e.do("GET", "/v1/accounts/fellow/fn/get_empty_slots", "")
+	if r.body["result"] != float64(27) {
+		t.Fatalf("get_empty_slots: %v", r.body)
+	}
+}
+
+func TestEmptyListsAreArraysNotNull(t *testing.T) {
+	e := newTestEnv(t, "")
+	e.fakeOnline("fellow", fakeOpts{})
+	for _, fn := range []string{"get_objects", "get_inventory_items"} {
+		r := e.do("GET", "/v1/accounts/fellow/fn/"+fn, "")
+		if list, ok := r.body["result"].([]any); !ok || len(list) != 0 {
+			t.Fatalf("%s: %v", fn, r.body)
+		}
+	}
+}
+
+func TestAtObjectThatIsGoneIs410WithoutAPacket(t *testing.T) {
+	e := newTestEnv(t, "")
+	fa := e.fakeOnline("fellow", fakeOpts{setup: withScene})
+
+	for _, ref := range []string{
+		"object/1@172,640", // a stump stands there now
+		"object/1@180,640", // nothing there
+	} {
+		r := e.do("POST", "/v1/accounts/fellow/fn/at_object", `{"object":"`+ref+`"}`)
+		r.want(t, 410, "entity_gone")
+		if got := r.body["error"].(map[string]any)["ref"]; got != ref {
+			t.Fatalf("error ref %v, want %s", got, ref)
+		}
+	}
+	e.do("POST", "/v1/accounts/fellow/fn/at_object", `{"object":"tree"}`).want(t, 400, "bad_argument")
+	fa.noPacket(t, 100*time.Millisecond)
+}
+
+// withBanker gives a fake client a banker (95) at server index 12 in view,
+// and the banker's option menu showing.
+func withBanker(c *client) {
+	c.x, c.z = 220, 634
+	c.npcs[0] = &npc{id: 95, serverIndex: 12, x: 220, z: 636, currentHP: 1, maxHP: 1}
+	c.npcCount = 1
+	c.optionMenu[0] = "I'd like to access my bank account please"
+	c.optionMenu[1] = "What is this place?"
+	c.optionMenuCount = 2
+	c.optionMenuVisible = true
+}
+
+func TestNPCAndOptionMenuQueries(t *testing.T) {
+	e := newTestEnv(t, "")
+	e.fakeOnline("fellow", fakeOpts{setup: withBanker})
+
+	r := e.do("GET", "/v1/accounts/fellow/fn/get_npcs", "")
+	r.want(t, 200, "")
+	npcs := r.body["result"].([]any)
+	if len(npcs) != 1 || npcs[0].(map[string]any)["ref"] != "npc/12:id=95" || npcs[0].(map[string]any)["z"] != float64(636) {
+		t.Fatalf("get_npcs: %v", r.body)
+	}
+
+	if r := e.do("GET", "/v1/accounts/fellow/fn/is_option_menu", ""); r.body["result"] != true {
+		t.Fatalf("is_option_menu: %v", r.body)
+	}
+	r = e.do("GET", "/v1/accounts/fellow/fn/get_option_menu", "")
+	options := r.body["result"].([]any)
+	if len(options) != 2 || options[0] != "I'd like to access my bank account please" {
+		t.Fatalf("get_option_menu: %v", r.body)
+	}
+	if r := e.do("GET", "/v1/accounts/fellow/fn/is_bank_open", ""); r.body["result"] != false {
+		t.Fatalf("is_bank_open: %v", r.body)
+	}
+}
+
+func TestEmptyNPCsAndMenuAreArraysNotNull(t *testing.T) {
+	e := newTestEnv(t, "")
+	e.fakeOnline("fellow", fakeOpts{})
+	for _, fn := range []string{"get_npcs", "get_option_menu"} {
+		r := e.do("GET", "/v1/accounts/fellow/fn/"+fn, "")
+		if list, ok := r.body["result"].([]any); !ok || len(list) != 0 {
+			t.Fatalf("%s: %v", fn, r.body)
+		}
+	}
+}
+
+// talk_to_npc's success path walks to the NPC first, and the pathfinder needs
+// the landscape archive these tests don't load (at_object is the same); the
+// live run covers it.
+func TestBankingActionsSendPackets(t *testing.T) {
+	e := newTestEnv(t, "")
+	fa := e.fakeOnline("fellow", fakeOpts{setup: withBanker})
+
+	e.do("POST", "/v1/accounts/fellow/fn/answer", `{"index":0}`).want(t, 200, "")
+	if op := fa.nextPacket(t); op != 116 {
+		t.Fatalf("answer sent opcode %d, want 116", op)
+	}
+	if r := e.do("GET", "/v1/accounts/fellow/fn/is_option_menu", ""); r.body["result"] != false {
+		t.Fatalf("menu still showing after answer: %v", r.body)
+	}
+
+	e.do("POST", "/v1/accounts/fellow/fn/deposit", `{"id":14,"amount":27}`).want(t, 200, "")
+	if op := fa.nextPacket(t); op != 23 {
+		t.Fatalf("deposit sent opcode %d, want 23", op)
+	}
+	e.do("POST", "/v1/accounts/fellow/fn/close_bank", `{}`).want(t, 200, "")
+	if op := fa.nextPacket(t); op != 212 {
+		t.Fatalf("close_bank sent opcode %d, want 212", op)
+	}
+}
+
+func TestBankingArgumentsAndGoneNPC(t *testing.T) {
+	e := newTestEnv(t, "")
+	fa := e.fakeOnline("fellow", fakeOpts{setup: withBanker})
+
+	for _, ref := range []string{
+		"npc/12:id=65", // another type of NPC holds that index now
+		"npc/13:id=95", // nothing at that index
+	} {
+		r := e.do("POST", "/v1/accounts/fellow/fn/talk_to_npc", `{"npc":"`+ref+`"}`)
+		r.want(t, 410, "entity_gone")
+		if got := r.body["error"].(map[string]any)["ref"]; got != ref {
+			t.Fatalf("error ref %v, want %s", got, ref)
+		}
+	}
+	for _, body := range []string{
+		`{"npc":"banker"}`, `{"npc":"npc/12"}`, `{"npc":"npc/012:id=95"}`, `{"npc":"object/1@170,640"}`,
+	} {
+		e.do("POST", "/v1/accounts/fellow/fn/talk_to_npc", body).want(t, 400, "bad_argument")
+	}
+	e.do("POST", "/v1/accounts/fellow/fn/answer", `{"index":-1}`).want(t, 400, "bad_argument")
+	e.do("POST", "/v1/accounts/fellow/fn/answer", `{"index":20}`).want(t, 400, "bad_argument")
+	e.do("POST", "/v1/accounts/fellow/fn/deposit", `{"id":14,"amount":0}`).want(t, 400, "bad_argument")
+	e.do("POST", "/v1/accounts/fellow/fn/deposit", `{"id":70000,"amount":1}`).want(t, 400, "bad_argument")
+	e.do("POST", "/v1/accounts/fellow/fn/deposit", `{"id":14}`).want(t, 400, "bad_argument")
+	fa.noPacket(t, 100*time.Millisecond)
+}
+
+func TestWalkPathToRejectsBadCoordinates(t *testing.T) {
+	e := newTestEnv(t, "")
+	fa := e.fakeOnline("fellow", fakeOpts{})
+
+	e.do("POST", "/v1/accounts/fellow/fn/walk_path_to", `{"x":-5,"z":640}`).want(t, 400, "bad_argument")
+	e.do("POST", "/v1/accounts/fellow/fn/walk_path_to", `{"x":167}`).want(t, 400, "bad_argument")
+	fa.noPacket(t, 100*time.Millisecond)
+}
+
 func TestFnRequestErrors(t *testing.T) {
 	e := newTestEnv(t, "")
 	fa := e.fakeOnline("fellow", fakeOpts{})
