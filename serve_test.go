@@ -187,6 +187,18 @@ func setVar[T any](t *testing.T, v *T, val T) {
 	t.Cleanup(func() { *v = old })
 }
 
+// waitUntil polls until cond holds, for effects of a packet the event loop
+// handles after the test sent it.
+func waitUntil(t *testing.T, cond func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if cond() {
+			return
+		}
+	}
+	t.Fatal("condition not met within 5s")
+}
+
 // --- calls ------------------------------------------------------------------
 
 func TestQueryReturnsResultAndSession(t *testing.T) {
@@ -388,6 +400,56 @@ func TestBankingArgumentsAndGoneNPC(t *testing.T) {
 	e.do("POST", "/v1/accounts/fellow/fn/deposit", `{"id":70000,"amount":1}`).want(t, 400, "bad_argument")
 	e.do("POST", "/v1/accounts/fellow/fn/deposit", `{"id":14}`).want(t, 400, "bad_argument")
 	fa.noPacket(t, 100*time.Millisecond)
+}
+
+// withSleepingBag gives a fake client an axe and a sleeping bag (1263).
+func withSleepingBag(c *client) {
+	for i, it := range []*item{{id: 87, amount: 1, equipped: true}, {id: 1263, amount: 1}} {
+		it.slot = i
+		c.inventory[i] = it
+	}
+	c.inventoryCount = 2
+}
+
+func TestUseSleepingBagSendsThePacketAndAnswersTrue(t *testing.T) {
+	e := newTestEnv(t, "")
+	fa := e.fakeOnline("fellow", fakeOpts{setup: withSleepingBag})
+
+	r := e.do("POST", "/v1/accounts/fellow/fn/use_sleeping_bag", `{}`)
+	r.want(t, 200, "")
+	if r.body["result"] != true {
+		t.Fatalf("use_sleeping_bag: %v", r.body)
+	}
+	if op := fa.nextPacket(t); op != 90 {
+		t.Fatalf("use_sleeping_bag sent opcode %d, want 90", op)
+	}
+}
+
+func TestUseSleepingBagWithNoBagAnswersFalseAndSendsNothing(t *testing.T) {
+	e := newTestEnv(t, "")
+	fa := e.fakeOnline("fellow", fakeOpts{setup: withScene}) // an axe and logs, no bag
+
+	r := e.do("POST", "/v1/accounts/fellow/fn/use_sleeping_bag", `{}`)
+	r.want(t, 200, "")
+	if r.body["result"] != false {
+		t.Fatalf("use_sleeping_bag with no bag: %v", r.body)
+	}
+	fa.noPacket(t, 100*time.Millisecond)
+	e.do("POST", "/v1/accounts/fellow/fn/use_sleeping_bag", `{"slot":1}`).want(t, 400, "bad_argument")
+}
+
+func TestIsSleepingFollowsTheSleepScreen(t *testing.T) {
+	e := newTestEnv(t, "")
+	e.fakeOnline("fellow", fakeOpts{})
+	if r := e.do("GET", "/v1/accounts/fellow/fn/is_sleeping", ""); r.body["result"] != false {
+		t.Fatalf("is_sleeping when awake: %v", r.body)
+	}
+
+	e = newTestEnv(t, "")
+	e.fakeOnline("fellow", fakeOpts{setup: func(c *client) { c.sleeping = true }})
+	if r := e.do("GET", "/v1/accounts/fellow/fn/is_sleeping", ""); r.body["result"] != true {
+		t.Fatalf("is_sleeping when asleep: %v", r.body)
+	}
 }
 
 func TestWalkPathToRejectsBadCoordinates(t *testing.T) {

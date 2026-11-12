@@ -514,6 +514,47 @@ func TestSessionLifecycleOverFakeGame(t *testing.T) {
 	}
 }
 
+// Sleeping through the real packet handlers: the sleep screen (117) makes
+// is_sleeping true, and with no script running the sleep word goes out only
+// once the sleep fatigue (244) reaches zero (the first image never triggers
+// it, a script's wakeup_at is the only other trigger). The wake-up (84)
+// ends it.
+func TestSleepingOverFakeGame(t *testing.T) {
+	g := startFakeGame(t)
+	setVar(t, &settings.OcrSettings, &ocrSettings{OcrType: "hash"})
+	e := newTestEnv(t, "")
+	grantLogins(t, e.s.bot)
+
+	e.do("POST", "/v1/accounts/Fellow%20Tst1/login", `{"password":"pw","autologin":false}`).want(t, 202, "")
+	s := e.openStream("/v1/accounts/fellow_tst1/events", "0")
+	g.waitLogin()
+	g.worldLoaded()
+	s.waitFor(evSession, 5*time.Second, func(d map[string]any) bool { return d["state"] == string(stateOnline) })
+
+	isSleeping := func() any {
+		return e.do("GET", "/v1/accounts/fellow_tst1/fn/is_sleeping", "").body["result"]
+	}
+	if isSleeping() != false {
+		t.Fatal("asleep before the sleep screen")
+	}
+
+	g.send(117, []byte{1, 2, 3, 4}) // the sleep screen's image
+	waitUntil(t, func() bool { return isSleeping() == true })
+
+	g.send(244, u16(50)) // still draining: no word yet
+	g.send(244, u16(0))  // empty: now the word goes out
+	s.waitFor("sleep_word_sent", 5*time.Second, nil)
+	if op := g.nextPacket(); op != 45 {
+		t.Fatalf("sleep word sent as opcode %d, want 45", op)
+	}
+	if isSleeping() != true {
+		t.Fatal("awake before the server woke it")
+	}
+
+	g.send(84) // wake up
+	waitUntil(t, func() bool { return isSleeping() == false })
+}
+
 func TestFatalLoginOverFakeGame(t *testing.T) {
 	g := startFakeGame(t)
 	g.setLoginCode(3) // invalid credentials

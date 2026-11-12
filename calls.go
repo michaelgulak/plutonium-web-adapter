@@ -311,8 +311,8 @@ func inventoryItemViewOf(it *item) inventoryItemView {
 }
 
 // The first handful of functions, enough to prove the path end to end, what
-// woodcutting needs (FELLOW-16), and banking (FELLOW-18). The full surface is
-// FELLOW-11.
+// woodcutting needs (FELLOW-16), banking (FELLOW-18) and sleeping (FELLOW-14).
+// The full surface is FELLOW-11.
 func init() {
 	register(
 		&fnSpec{
@@ -505,6 +505,22 @@ func init() {
 				c.closeBank()
 				return nil, nil
 			},
+		},
+
+		// Sleeping (FELLOW-14). The server asks the client for the sleep word
+		// once the sleep screen shows; with no script running, plutonium
+		// answers it by itself when the fatigue bar reaches zero.
+		&fnSpec{
+			name: "is_sleeping",
+			kind: fnQuery,
+			call: func(c *client, _ fnArgs) (any, error) { return c.sleeping, nil },
+		},
+		// false means no sleeping bag was carried and nothing was sent, as
+		// walk_path_to's false means no path (plutonium returns nothing).
+		&fnSpec{
+			name: "use_sleeping_bag",
+			kind: fnAction,
+			call: func(c *client, _ fnArgs) (any, error) { return c.useSleepingBag(), nil },
 		},
 	)
 }

@@ -45,13 +45,16 @@ func (c *client) isItemEquippedByID(id int) bool {
 	return false
 }
 
-func (c *client) useSleepingBag() {
+// useSleepingBag reports whether a bag was carried and used; with none,
+// nothing is sent.
+func (c *client) useSleepingBag() bool {
 	bag := c.getInventoryItemByID(sleepingBagID)
-	if bag != nil {
-		c.useInventoryItem(bag)
-	} else {
+	if bag == nil {
 		fmt.Printf("[%s] Attempted to use nonexistent sleeping bag\n", c.user)
+		return false
 	}
+	c.useInventoryItem(bag)
+	return true
 }
 
 func (c *player) isSkilling() bool {
