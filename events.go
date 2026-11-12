@@ -216,7 +216,7 @@ func (c *client) emitMessage(name, message, from string) {
 
 // --- payload views and entity refs ---------------------------------------------
 //
-// Entities carry a deterministic natural-key ref (ARCHITECTURE §7, entity
+// Entities carry a deterministic natural-key ref (SERVE.md, entity
 // references), the same strings FELLOW-11 (adapter call surface) will
 // accept back: the adapter resolves a ref against live state, so there is
 // no handle registry to leak or go stale.

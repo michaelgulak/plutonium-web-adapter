@@ -200,7 +200,7 @@ func (a fnArgs) coordinate(name string) (int16, error) {
 	return int16(n), nil
 }
 
-// --- entity refs (ARCHITECTURE.md §7, "Entity references") ---------------------
+// --- entity refs (SERVE.md, "Entity references") -------------------------------
 
 func goneError(ref string) error {
 	return &apiError{status: http.StatusGone, code: "entity_gone", message: ref + " is no longer there", extra: map[string]any{"ref": ref}}
