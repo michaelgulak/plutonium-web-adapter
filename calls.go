@@ -251,6 +251,61 @@ func objectArg(c *client, args fnArgs, name string) (*object, error) {
 	return o, nil
 }
 
+// parseWallObjectRef reads "wall/<id>@<x>,<z>:<dir>". A tile can hold one wall
+// object per edge, so the direction is part of the key. Only the canonical
+// spelling is accepted, so a ref round-trips exactly.
+func parseWallObjectRef(arg, ref string) (id, x, z, dir int, err error) {
+	bad := badArg(arg, "is not a wall object ref (wall/<id>@<x>,<z>:<dir>)")
+	rest, ok := strings.CutPrefix(ref, "wall/")
+	if !ok {
+		return 0, 0, 0, 0, bad
+	}
+	idPart, at, ok := strings.Cut(rest, "@")
+	if !ok {
+		return 0, 0, 0, 0, bad
+	}
+	coords, dirPart, ok := strings.Cut(at, ":")
+	if !ok {
+		return 0, 0, 0, 0, bad
+	}
+	xPart, zPart, ok := strings.Cut(coords, ",")
+	if !ok {
+		return 0, 0, 0, 0, bad
+	}
+	var errs [4]error
+	id, errs[0] = strconv.Atoi(idPart)
+	x, errs[1] = strconv.Atoi(xPart)
+	z, errs[2] = strconv.Atoi(zPart)
+	dir, errs[3] = strconv.Atoi(dirPart)
+	if errors.Join(errs[:]...) != nil || fmt.Sprintf("wall/%d@%d,%d:%d", id, x, z, dir) != ref {
+		return 0, 0, 0, 0, bad
+	}
+	return id, x, z, dir, nil
+}
+
+// wallObjectArg resolves a wall object ref against what the client sees right
+// now. A door that has become a doorframe is gone, which is why the ref
+// carries the id.
+func wallObjectArg(c *client, args fnArgs, name string) (*wallObject, error) {
+	ref, err := args.String(name)
+	if err != nil {
+		return nil, err
+	}
+	id, x, z, dir, err := parseWallObjectRef(name, ref)
+	if err != nil {
+		return nil, err
+	}
+	for i := 0; i < c.wallObjectCount; i++ {
+		if w := c.wallObjects[i]; w.x == x && w.z == z && w.dir == dir {
+			if w.id != id {
+				break
+			}
+			return w, nil
+		}
+	}
+	return nil, goneError(ref)
+}
+
 // parseNPCRef reads "npc/<index>:id=<id>", where index is the NPC's server
 // index (a slot the server reuses) and id its type. Only the canonical
 // spelling is accepted, so a ref round-trips exactly.
@@ -311,7 +366,8 @@ func inventoryItemViewOf(it *item) inventoryItemView {
 }
 
 // The first handful of functions, enough to prove the path end to end, what
-// woodcutting needs (FELLOW-16), banking (FELLOW-18) and sleeping (FELLOW-14).
+// woodcutting needs (FELLOW-16), banking (FELLOW-18), sleeping (FELLOW-14) and
+// area transitions (FELLOW-25).
 // The full surface is FELLOW-11.
 func init() {
 	register(
@@ -391,6 +447,46 @@ func init() {
 					return nil, err
 				}
 				c.atObject(o)
+				return nil, nil
+			},
+		},
+		// The object's second command, e.g. a watch tower's "climb down".
+		&fnSpec{
+			name:   "at_object2",
+			kind:   fnAction,
+			params: []param{{name: "object", required: true}},
+			call: func(c *client, args fnArgs) (any, error) {
+				o, err := objectArg(c, args, "object")
+				if err != nil {
+					return nil, err
+				}
+				c.atObject2(o)
+				return nil, nil
+			},
+		},
+
+		// Wall objects: doors, doorframes, walls (area transitions, FELLOW-25).
+		&fnSpec{
+			name: "get_wall_objects",
+			kind: fnQuery,
+			call: func(c *client, _ fnArgs) (any, error) {
+				out := make([]objectView, c.wallObjectCount)
+				for i := range out {
+					out[i] = wallObjectViewOf(c.wallObjects[i])
+				}
+				return out, nil
+			},
+		},
+		&fnSpec{
+			name:   "at_wall_object",
+			kind:   fnAction,
+			params: []param{{name: "wall_object", required: true}},
+			call: func(c *client, args fnArgs) (any, error) {
+				w, err := wallObjectArg(c, args, "wall_object")
+				if err != nil {
+					return nil, err
+				}
+				c.atWallObject(w)
 				return nil, nil
 			},
 		},

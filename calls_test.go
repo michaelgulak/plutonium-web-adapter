@@ -93,6 +93,20 @@ func TestParseObjectRef(t *testing.T) {
 	}
 }
 
+func TestParseWallObjectRef(t *testing.T) {
+	id, x, z, dir, err := parseWallObjectRef("wall_object", "wall/2@170,641:1")
+	if err != nil || id != 2 || x != 170 || z != 641 || dir != 1 {
+		t.Fatalf("got %d %d %d %d %v", id, x, z, dir, err)
+	}
+	for _, ref := range []string{
+		"", "wall/2", "wall/2@170,641", "object/2@170,641:1", "wall/a@170,641:1", "wall/2@170,641:x",
+		"wall/02@170,641:1", "wall/2@170,641:+1", " wall/2@170,641:1", "wall/2@170,641:1:0",
+	} {
+		_, _, _, _, err := parseWallObjectRef("wall_object", ref)
+		wantAPIError(t, err, http.StatusBadRequest, "bad_argument")
+	}
+}
+
 func TestParseNPCRef(t *testing.T) {
 	index, id, err := parseNPCRef("npc", "npc/412:id=65")
 	if err != nil || index != 412 || id != 65 {

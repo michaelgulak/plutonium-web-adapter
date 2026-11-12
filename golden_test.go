@@ -149,7 +149,7 @@ func firstName(evs []event) string {
 // --- call responses -------------------------------------------------------------
 
 // goldenScene gives a fake client something for every query to report: a
-// position and fatigue, a tree and a stump, an axe, a log and a sleeping bag,
+// position and fatigue, a tree and a stump, a door, an axe, a log and a sleeping bag,
 // a banker in view with the banker's menu showing.
 func goldenScene(c *client) {
 	c.x, c.z = 220, 634
@@ -158,6 +158,8 @@ func goldenScene(c *client) {
 		c.objects[i] = o
 	}
 	c.objectCount = 2
+	c.wallObjects[0] = &wallObject{id: 2, x: 220, z: 633, dir: 0}
+	c.wallObjectCount = 1
 	for i, it := range []*item{{id: 87, amount: 1, equipped: true}, {id: 14, amount: 1}, {id: 1263, amount: 1}} {
 		it.slot = i
 		c.inventory[i] = it
@@ -181,6 +183,7 @@ var callScenarios = map[string]callScenario{
 	"get_z":               {"GET", ""},
 	"get_fatigue":         {"GET", ""},
 	"get_objects":         {"GET", ""},
+	"get_wall_objects":    {"GET", ""},
 	"get_inventory_items": {"GET", ""},
 	"get_empty_slots":     {"GET", ""},
 	"get_npcs":            {"GET", ""},
@@ -199,9 +202,11 @@ var callScenarios = map[string]callScenario{
 // archive these tests don't load; their gone answers are pinned instead, and
 // the live suite covers their success.
 var pathfindingFunctions = map[string]callScenario{
-	"walk_path_to": {"POST", `{"x":-1,"z":0}`}, // a bad_argument: the call shape, without walking
-	"at_object":    {"POST", `{"object":"object/1@170,640"}`},
-	"talk_to_npc":  {"POST", `{"npc":"npc/13:id=95"}`},
+	"walk_path_to":   {"POST", `{"x":-1,"z":0}`}, // a bad_argument: the call shape, without walking
+	"at_object":      {"POST", `{"object":"object/1@170,640"}`},
+	"at_object2":     {"POST", `{"object":"object/1@170,640"}`},
+	"at_wall_object": {"POST", `{"wall_object":"wall/2@170,641:0"}`},
+	"talk_to_npc":    {"POST", `{"npc":"npc/13:id=95"}`},
 }
 
 func TestGoldenCallResponses(t *testing.T) {

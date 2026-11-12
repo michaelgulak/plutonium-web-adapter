@@ -249,6 +249,11 @@ func withScene(c *client) {
 		c.objects[i] = o
 	}
 	c.objectCount = 2
+	// A closed door (2) on the north edge of the bot's tile, and an open doorframe (1) beside it.
+	for i, w := range []*wallObject{{id: 2, x: 170, z: 641, dir: 0}, {id: 1, x: 171, z: 641, dir: 0}} {
+		c.wallObjects[i] = w
+	}
+	c.wallObjectCount = 2
 	for i, it := range []*item{{id: 87, amount: 1, equipped: true}, {id: 14, amount: 1}, {id: 14, amount: 1}} {
 		it.slot = i
 		c.inventory[i] = it
@@ -281,10 +286,23 @@ func TestObjectsAndInventoryQueries(t *testing.T) {
 	}
 }
 
+func TestWallObjectsQuery(t *testing.T) {
+	e := newTestEnv(t, "")
+	e.fakeOnline("fellow", fakeOpts{setup: withScene})
+
+	r := e.do("GET", "/v1/accounts/fellow/fn/get_wall_objects", "")
+	r.want(t, 200, "")
+	walls := r.body["result"].([]any)
+	door := walls[0].(map[string]any)
+	if len(walls) != 2 || door["ref"] != "wall/2@170,641:0" || door["id"] != float64(2) || door["dir"] != float64(0) {
+		t.Fatalf("get_wall_objects: %v", r.body)
+	}
+}
+
 func TestEmptyListsAreArraysNotNull(t *testing.T) {
 	e := newTestEnv(t, "")
 	e.fakeOnline("fellow", fakeOpts{})
-	for _, fn := range []string{"get_objects", "get_inventory_items"} {
+	for _, fn := range []string{"get_objects", "get_wall_objects", "get_inventory_items"} {
 		r := e.do("GET", "/v1/accounts/fellow/fn/"+fn, "")
 		if list, ok := r.body["result"].([]any); !ok || len(list) != 0 {
 			t.Fatalf("%s: %v", fn, r.body)
@@ -307,6 +325,26 @@ func TestAtObjectThatIsGoneIs410WithoutAPacket(t *testing.T) {
 		}
 	}
 	e.do("POST", "/v1/accounts/fellow/fn/at_object", `{"object":"tree"}`).want(t, 400, "bad_argument")
+	fa.noPacket(t, 100*time.Millisecond)
+}
+
+func TestAtWallObjectThatIsGoneIs410WithoutAPacket(t *testing.T) {
+	e := newTestEnv(t, "")
+	fa := e.fakeOnline("fellow", fakeOpts{setup: withScene})
+
+	for _, ref := range []string{
+		"wall/2@171,641:0", // a doorframe stands there, not a door
+		"wall/2@170,641:1", // the door is on another edge of that tile
+		"wall/2@180,641:0", // nothing there
+	} {
+		r := e.do("POST", "/v1/accounts/fellow/fn/at_wall_object", `{"wall_object":"`+ref+`"}`)
+		r.want(t, 410, "entity_gone")
+		if got := r.body["error"].(map[string]any)["ref"]; got != ref {
+			t.Fatalf("error ref %v, want %s", got, ref)
+		}
+	}
+	e.do("POST", "/v1/accounts/fellow/fn/at_wall_object", `{"wall_object":"object/2@170,641"}`).want(t, 400, "bad_argument")
+	e.do("POST", "/v1/accounts/fellow/fn/at_object2", `{"object":"object/1@180,640"}`).want(t, 410, "entity_gone")
 	fa.noPacket(t, 100*time.Millisecond)
 }
 

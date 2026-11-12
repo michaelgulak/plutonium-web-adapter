@@ -48,12 +48,15 @@ surface). Served so far:
 | woodcutting | `walk_path_to`, `get_objects`, `at_object`, `get_inventory_items`, `get_empty_slots` |
 | banking | `get_npcs`, `talk_to_npc`, `is_option_menu`, `get_option_menu`, `answer`, `is_bank_open`, `deposit`, `close_bank` |
 | sleeping | `is_sleeping`, `use_sleeping_bag` |
+| area transitions | `get_wall_objects`, `at_wall_object`, `at_object2` |
 
 - `walk_path_to` answers `false` for "no path". On that precedent, `use_sleeping_bag`
   answers `true` when a bag was carried and used, and `false` when none was, in which
   case nothing is sent (plutonium itself returns nothing and prints a message only this
   process's console would show).
 - `answer` checks the index against the menu's real option count.
+- `at_wall_object` takes its ref as `wall_object`, plutonium's parameter name. A wall
+  object's ref carries its direction, since a tile can hold one per edge.
 - With no script running, plutonium answers the sleep word itself, but only once the
   sleep fatigue reaches zero (`client.go:2283`), so a serve-mode sleep always runs to 0%.
   The answer is announced as the `sleep_word_sent` event. When plutonium's hash table
@@ -193,8 +196,8 @@ as a shared contract later.
 - *Events:* every streamed event has one, produced through the real packet handlers
   where possible.
 - *Calls:* every served function has one under `testdata/functions/`, answered through
-  the real HTTP handlers. `walk_path_to`, `at_object` and `talk_to_npc` need the
-  pathfinder, which needs the landscape archive the tests don't load, so their files pin
+  the real HTTP handlers. `walk_path_to`, `at_object`, `at_object2`, `at_wall_object` and
+  `talk_to_npc` need the pathfinder, which needs the landscape archive the tests don't load, so their files pin
   an error answer instead, and the live suite covers their success.
 - *Errors:* `testdata/errors/` pins the `account_offline` envelope.
 
