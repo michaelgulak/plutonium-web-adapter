@@ -153,6 +153,8 @@ func firstName(evs []event) string {
 // a banker in view with the banker's menu showing.
 func goldenScene(c *client) {
 	c.x, c.z = 220, 634
+	// A map with no landscape loaded, all open ground, for the path queries.
+	c.world, c.localWorld = newWorld(), newLocalWorld()
 	c.fatigue = 37
 	for i, o := range []*object{{id: 1, x: 218, z: 630}, {id: 4, x: 219, z: 630}} {
 		c.objects[i] = o
@@ -173,7 +175,8 @@ func goldenScene(c *client) {
 	c.optionMenuVisible = true
 }
 
-// callScenario is one request whose exact response is pinned.
+// callScenario is one request whose exact response is pinned. A GET's body is
+// sent as its query string.
 type callScenario struct{ method, body string }
 
 // callScenarios answer each served function once against goldenScene, named
@@ -191,6 +194,10 @@ var callScenarios = map[string]callScenario{
 	"get_option_menu":     {"GET", ""},
 	"is_bank_open":        {"GET", ""},
 	"is_sleeping":         {"GET", ""},
+	// goldenScene's map has no landscape loaded, so it is open ground and
+	// these find straight paths.
+	"calculate_path_to":   {"GET", "x=223&z=634"},
+	"calculate_path":      {"GET", "start_x=220&start_z=634&x=220&z=637"},
 	"send_chat_message":   {"POST", `{"message":"hello"}`},
 	"answer":              {"POST", `{"index":0}`},
 	"deposit":             {"POST", `{"id":14,"amount":1}`},
@@ -215,7 +222,11 @@ func TestGoldenCallResponses(t *testing.T) {
 
 	run := func(file, name string, sc callScenario) {
 		t.Run(name, func(t *testing.T) {
-			_, raw := e.raw(sc.method, "/v1/accounts/fellow/fn/"+name, sc.body)
+			path, body := "/v1/accounts/fellow/fn/"+name, sc.body
+			if sc.method == "GET" && body != "" {
+				path, body = path+"?"+body, ""
+			}
+			_, raw := e.raw(sc.method, path, body)
 			golden(t, file, raw)
 		})
 	}

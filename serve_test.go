@@ -507,6 +507,32 @@ func TestWalkPathToRejectsBadCoordinates(t *testing.T) {
 	fa.noPacket(t, 100*time.Millisecond)
 }
 
+func TestCalculatePathEdges(t *testing.T) {
+	e := newTestEnv(t, "")
+	// Open ground (a map with no landscape loaded), with something in view, a
+	// closed door say, blocking the target tile.
+	e.fakeOnline("fellow", fakeOpts{setup: func(c *client) {
+		c.x, c.z, c.world, c.localWorld = 220, 634, newWorld(), newLocalWorld()
+		c.localWorld.setTileOr(223, 634, fullBlockC)
+	}})
+	fn := "/v1/accounts/fellow/fn/"
+
+	// Counting what's in view, there's no path: the result is null.
+	if r := e.do("GET", fn+"calculate_path_to?x=223&z=634&max_depth=8", ""); r.status != 200 || r.body["result"] != nil {
+		t.Fatalf("blocked path: %d %v", r.status, r.body)
+	}
+	// skip_local leaves what's in view out, so the same target has a path.
+	if r := e.do("GET", fn+"calculate_path_to?x=223&z=634&max_depth=8&skip_local=true", ""); r.status != 200 || r.body["result"] == nil {
+		t.Fatalf("path with skip_local: %d %v", r.status, r.body)
+	}
+	// A path that starts where it ends would make plutonium loop forever.
+	e.do("GET", fn+"calculate_path_to?x=220&z=634", "").want(t, 400, "bad_argument")
+	e.do("GET", fn+"calculate_path?start_x=5&start_z=6&x=5&z=6", "").want(t, 400, "bad_argument")
+	e.do("GET", fn+"calculate_path_to?x=223&z=634&depth=0", "").want(t, 400, "bad_argument")
+	e.do("GET", fn+"calculate_path_to?x=223&z=634&max_depth=1024", "").want(t, 400, "bad_argument")
+	e.do("GET", fn+"calculate_path_to?x=223&z=634&skip_local=maybe", "").want(t, 400, "bad_argument")
+}
+
 func TestFnRequestErrors(t *testing.T) {
 	e := newTestEnv(t, "")
 	fa := e.fakeOnline("fellow", fakeOpts{})

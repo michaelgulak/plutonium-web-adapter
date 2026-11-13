@@ -137,6 +137,21 @@ func (a fnArgs) Int(name string) (int, error) {
 	return n, nil
 }
 
+func (a fnArgs) Bool(name string) (bool, error) {
+	if a.body != nil {
+		var b bool
+		if err := json.Unmarshal(a.body[name], &b); err != nil {
+			return false, badArg(name, "must be true or false")
+		}
+		return b, nil
+	}
+	b, err := strconv.ParseBool(a.query.Get(name))
+	if err != nil {
+		return false, badArg(name, "must be true or false")
+	}
+	return b, nil
+}
+
 type fnKind int
 
 const (
@@ -198,6 +213,77 @@ func (a fnArgs) coordinate(name string) (int16, error) {
 		return 0, badArg(name, "is not a world coordinate")
 	}
 	return int16(n), nil
+}
+
+// --- paths (SERVE.md, "Calls") -----------------------------------------------------
+
+// pathParams are calculate_path's and calculate_path_to's optional arguments,
+// with plutonium's own defaults (script.go:1050-1052): depth found by doubling,
+// local objects counted (API.md says skip_local defaults to true; the code
+// says false, and the code is what runs), max_depth 512.
+var pathParams = []param{{name: "depth"}, {name: "skip_local"}, {name: "max_depth"}}
+
+// pathView is a plutonium path object's read-only side, length() and coords(),
+// as a value: the object itself walks a cursor along the path and lives only
+// in this process, so it has no ref to send.
+type pathView struct {
+	Length int         `json:"length"`
+	Coords []tileCoord `json:"coords"`
+}
+
+type tileCoord struct {
+	X int `json:"x"`
+	Z int `json:"z"`
+}
+
+// calculatePath runs plutonium's generateLongPath from (sx, sz) to (x, z) with
+// the optional arguments in args, answering a pathView, or nil for no path.
+func calculatePath(c *client, args fnArgs, sx, sz, x, z int16) (any, error) {
+	depth, skipLocal, maxDepth := int16(-1), false, int16(512)
+	if args.has("depth") {
+		d, err := args.Int("depth")
+		if err != nil {
+			return nil, err
+		}
+		if d < 1 || d > 800 { // walk_path_depth_to's documented limit (API.md)
+			return nil, badArg("depth", "must be between 1 and 800")
+		}
+		depth = int16(d)
+	}
+	if args.has("skip_local") {
+		b, err := args.Bool("skip_local")
+		if err != nil {
+			return nil, err
+		}
+		skipLocal = b
+	}
+	if args.has("max_depth") {
+		d, err := args.Int("max_depth")
+		if err != nil {
+			return nil, err
+		}
+		// API.md's values are the powers of two up to 512; each doubling past
+		// a failed depth builds a board of (2d+1)² nodes on the event loop.
+		if d < 1 || d > 512 {
+			return nil, badArg("max_depth", "must be between 1 and 512")
+		}
+		maxDepth = int16(d)
+	}
+	// generateLongPath sizes its first board from the distance, so a zero
+	// distance gives depth 0, which doubles to 0 forever (accessors.go:584-597).
+	if sx == x && sz == z {
+		return nil, badArg("x", "the path would start where it ends")
+	}
+
+	_, coords := c.generateLongPath(sx, sz, x, z, depth, skipLocal, maxDepth)
+	if coords == nil {
+		return nil, nil
+	}
+	view := pathView{Length: len(coords), Coords: make([]tileCoord, len(coords))}
+	for i, pt := range coords {
+		view.Coords[i] = tileCoord{int(pt.x), int(pt.y)}
+	}
+	return view, nil
 }
 
 // --- entity refs (SERVE.md, "Entity references") -------------------------------
@@ -422,6 +508,46 @@ func init() {
 				}
 				c.walkTo(int(pt.x), int(pt.y), int(pt.x), int(pt.y), false, false)
 				return true, nil
+			},
+		},
+
+		// Paths, as plutonium's calculate_path_to and calculate_path: the
+		// tiles of a path, without walking it. With skip_local, only the
+		// landscape and fixed scenery count, so closed doors and gates are
+		// passable. null means no path within max_depth.
+		&fnSpec{
+			name:   "calculate_path_to",
+			kind:   fnQuery,
+			params: append([]param{{name: "x", required: true}, {name: "z", required: true}}, pathParams...),
+			call: func(c *client, args fnArgs) (any, error) {
+				x, err := args.coordinate("x")
+				if err != nil {
+					return nil, err
+				}
+				z, err := args.coordinate("z")
+				if err != nil {
+					return nil, err
+				}
+				return calculatePath(c, args, int16(c.x), int16(c.z), x, z)
+			},
+		},
+		&fnSpec{
+			name: "calculate_path",
+			kind: fnQuery,
+			params: append([]param{
+				{name: "start_x", required: true}, {name: "start_z", required: true},
+				{name: "x", required: true}, {name: "z", required: true},
+			}, pathParams...),
+			call: func(c *client, args fnArgs) (any, error) {
+				var coords [4]int16
+				for i, name := range []string{"start_x", "start_z", "x", "z"} {
+					n, err := args.coordinate(name)
+					if err != nil {
+						return nil, err
+					}
+					coords[i] = n
+				}
+				return calculatePath(c, args, coords[0], coords[1], coords[2], coords[3])
 			},
 		},
 

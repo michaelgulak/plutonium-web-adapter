@@ -49,6 +49,7 @@ surface). Served so far:
 | banking | `get_npcs`, `talk_to_npc`, `is_option_menu`, `get_option_menu`, `answer`, `is_bank_open`, `deposit`, `close_bank` |
 | sleeping | `is_sleeping`, `use_sleeping_bag` |
 | area transitions | `get_wall_objects`, `at_wall_object`, `at_object2` |
+| path queries | `calculate_path_to`, `calculate_path` |
 
 - `walk_path_to` answers `false` for "no path". On that precedent, `use_sleeping_bag`
   answers `true` when a bag was carried and used, and `false` when none was, in which
@@ -64,9 +65,21 @@ surface). Served so far:
   either, accepts any word (`SleepHandler.java:64`).
 - `open_bank()` is deliberately not served: it is a script routine with its own timer,
   not a primitive, so the brain composes it from `talk_to_npc` and `answer`.
-- Plutonium's `Path` objects (`calculate_path_to` and friends) live in this process's
-  memory and have no natural-key ref, so how, or whether, a route can be named across
-  HTTP is still to be decided.
+- `calculate_path_to` and `calculate_path` are queries. Plutonium returns a path
+  object that walks a cursor along the path and exists only in this process, so they
+  return its read-only side instead, as a value: `{"length": n, "coords": [{"x","z"}, …]}`,
+  the tiles after the start up to and including the target, or `null` for no path within
+  `max_depth`. The arguments are plutonium's: `depth`, `skip_local` and `max_depth` are
+  optional. `skip_local` defaults to **false**, as plutonium's code does
+  (`script.go:1051`), although API.md says true. With it set, only the landscape and
+  fixed scenery count, so a closed door or gate in view doesn't block the path.
+- A path that starts where it ends is refused as `bad_argument`, because plutonium would
+  loop forever sizing its search (`accessors.go:584-597`). So are a `depth` outside 1 to
+  800 and a `max_depth` outside 1 to 512 (API.md's limits). On the real landscape, a
+  query with no path from open ground takes about 5 ms at `max_depth` 64 and about
+  180 ms at 512, all of it on the account's event loop.
+- Plutonium's other path calls (`calculate_path_through`, `create_path`, and the path
+  object's walking methods) aren't served, since their state lives in this process.
 
 ## Entity references
 
@@ -196,7 +209,8 @@ as a shared contract later.
 - *Events:* every streamed event has one, produced through the real packet handlers
   where possible.
 - *Calls:* every served function has one under `testdata/functions/`, answered through
-  the real HTTP handlers. `walk_path_to`, `at_object`, `at_object2`, `at_wall_object` and
+  the real HTTP handlers. The path queries run on a map with no landscape loaded, which
+  is open ground. `walk_path_to`, `at_object`, `at_object2`, `at_wall_object` and
   `talk_to_npc` need the pathfinder, which needs the landscape archive the tests don't load, so their files pin
   an error answer instead, and the live suite covers their success.
 - *Errors:* `testdata/errors/` pins the `account_offline` envelope.
