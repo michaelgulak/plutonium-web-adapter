@@ -1,6 +1,6 @@
 # Plutonium (fellowship fork)
 
-This is `plutonium-web-adapter`, a fork of [plutonium](https://gitlab.com/openrsc/plutonium) for Project Fellowship. It adds a serve mode (`-serve`) that exposes plutonium's script API over JSON REST, so an external program can drive accounts with no Python script involved. [SERVE.md](SERVE.md) documents serve mode, and [GPYTHON.md](GPYTHON.md) is a reference for anyone writing a Python chore script.
+This is `plutonium-serve`, a fork of [plutonium](https://gitlab.com/openrsc/plutonium) for Project Fellowship. It adds a serve mode (`-serve`) that exposes plutonium's script API over JSON REST, so an external program can drive accounts with no Python script involved. [SERVE.md](SERVE.md) documents serve mode, and [GPYTHON.md](GPYTHON.md) is a reference for anyone writing a Python chore script.
 
 **About the code in this fork:** the changes this fork makes on top of upstream — serve mode, the HTTP adapter, and related edits — are almost entirely AI-generated, written with [Claude Code](https://claude.com/claude-code) under the repository owner's direction and review. The plutonium client itself (protocol, pathfinding, scripting engine) is upstream's work and is unchanged apart from small hooks the adapter needs. Use `git log` against upstream to see exactly which parts are which.
 
