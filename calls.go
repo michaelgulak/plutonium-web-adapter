@@ -484,6 +484,28 @@ func init() {
 			},
 		},
 
+		// Walking a short way, as plutonium's walk_to: one walk packet to the
+		// tile, planned within the loaded region only, with no long-distance
+		// search first. false means no path was found. Sent to the tile the
+		// player stands on, it stops them: the server drops the path it was
+		// walking (WalkRequest.java:94-95).
+		&fnSpec{
+			name:   "walk_to",
+			kind:   fnAction,
+			params: []param{{name: "x", required: true}, {name: "z", required: true}},
+			call: func(c *client, args fnArgs) (any, error) {
+				x, err := args.coordinate("x")
+				if err != nil {
+					return nil, err
+				}
+				z, err := args.coordinate("z")
+				if err != nil {
+					return nil, err
+				}
+				return c.walkTo(int(x), int(z), int(x), int(z), false, false), nil
+			},
+		},
+
 		// Paths, as plutonium's calculate_path_to and calculate_path: the
 		// tiles of a path, without walking it. With skip_local, only the
 		// landscape and fixed scenery count, so closed doors and gates are

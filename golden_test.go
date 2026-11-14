@@ -210,6 +210,7 @@ var callScenarios = map[string]callScenario{
 // the live suite covers their success.
 var pathfindingFunctions = map[string]callScenario{
 	"walk_path_to":   {"POST", `{"x":-1,"z":0}`}, // a bad_argument: the call shape, without walking
+	"walk_to":        {"POST", `{"x":-1,"z":0}`}, // likewise: it plans within the loaded region, which the scene doesn't set
 	"at_object":      {"POST", `{"object":"object/1@170,640"}`},
 	"at_object2":     {"POST", `{"object":"object/1@170,640"}`},
 	"at_wall_object": {"POST", `{"wall_object":"wall/2@170,641:0"}`},

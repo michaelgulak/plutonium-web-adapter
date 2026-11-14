@@ -50,12 +50,17 @@ surface). Served so far:
 | sleeping | `is_sleeping`, `use_sleeping_bag` |
 | area transitions | `get_wall_objects`, `at_wall_object`, `at_object2` |
 | path queries | `calculate_path_to`, `calculate_path` |
+| replying to chat | `walk_to` |
 
 - `walk_path_to` answers `false` for "no path". On that precedent, `use_sleeping_bag`
   answers `true` when a bag was carried and used, and `false` when none was, in which
   case nothing is sent (plutonium itself returns nothing and prints a message only this
   process's console would show).
 - `answer` checks the index against the menu's real option count.
+- `walk_to` sends one walk packet planned within the loaded region, with none of
+  `walk_path_to`'s long-distance search. Its use here is stopping: sent to the tile the
+  player stands on, the server drops whatever path it was walking
+  (`WalkRequest.java:94-95`), so the brain can stop a bot before it types a reply.
 - `at_wall_object` takes its ref as `wall_object`, plutonium's parameter name. A wall
   object's ref carries its direction, since a tile can hold one per edge.
 - With no script running, plutonium answers the sleep word itself, but only once the
@@ -210,7 +215,7 @@ as a shared contract later.
   where possible.
 - *Calls:* every served function has one under `testdata/functions/`, answered through
   the real HTTP handlers. The path queries run on a map with no landscape loaded, which
-  is open ground. `walk_path_to`, `at_object`, `at_object2`, `at_wall_object` and
+  is open ground. `walk_path_to`, `walk_to`, `at_object`, `at_object2`, `at_wall_object` and
   `talk_to_npc` need the pathfinder, which needs the landscape archive the tests don't load, so their files pin
   an error answer instead, and the live suite covers their success.
 - *Errors:* `testdata/errors/` pins the `account_offline` envelope.
