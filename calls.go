@@ -16,7 +16,6 @@ import (
 	"net/url"
 	"runtime/debug"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -203,6 +202,22 @@ func register(specs ...*fnSpec) {
 	}
 }
 
+// optionalInt reads an integer argument that may be left out, answering def
+// when it is; given, it must lie between lo and hi.
+func (a fnArgs) optionalInt(name string, lo, hi, def int) (int, error) {
+	if !a.has(name) {
+		return def, nil
+	}
+	n, err := a.Int(name)
+	if err != nil {
+		return 0, err
+	}
+	if n < lo || n > hi {
+		return 0, badArg(name, fmt.Sprintf("must be between %d and %d", lo, hi))
+	}
+	return n, nil
+}
+
 // coordinate reads an integer argument that must fit a world coordinate.
 func (a fnArgs) coordinate(name string) (int16, error) {
 	n, err := a.Int(name)
@@ -223,6 +238,15 @@ func (a fnArgs) coordinate(name string) (int16, error) {
 // says false, and the code is what runs), max_depth 512.
 var pathParams = []param{{name: "depth"}, {name: "skip_local"}, {name: "max_depth"}}
 
+const (
+	// depthLimit is walk_path_depth_to's documented limit for depth (API.md).
+	depthLimit = 800
+	// maxPathDepth is API.md's largest max_depth (its values are the powers of
+	// two up to 512), and plutonium's default. Each doubling past a failed
+	// depth builds a board of (2d+1)² nodes on the event loop.
+	maxPathDepth = 512
+)
+
 // pathView is a plutonium path object's read-only side, length() and coords(),
 // as a value: the object itself walks a cursor along the path and lives only
 // in this process, so it has no ref to send.
@@ -239,35 +263,19 @@ type tileCoord struct {
 // calculatePath runs plutonium's generateLongPath from (sx, sz) to (x, z) with
 // the optional arguments in args, answering a pathView, or nil for no path.
 func calculatePath(c *client, args fnArgs, sx, sz, x, z int16) (any, error) {
-	depth, skipLocal, maxDepth := int16(-1), false, int16(512)
-	if args.has("depth") {
-		d, err := args.Int("depth")
-		if err != nil {
-			return nil, err
-		}
-		if d < 1 || d > 800 { // walk_path_depth_to's documented limit (API.md)
-			return nil, badArg("depth", "must be between 1 and 800")
-		}
-		depth = int16(d)
+	depth, err := args.optionalInt("depth", 1, depthLimit, -1)
+	if err != nil {
+		return nil, err
 	}
+	maxDepth, err := args.optionalInt("max_depth", 1, maxPathDepth, maxPathDepth)
+	if err != nil {
+		return nil, err
+	}
+	skipLocal := false
 	if args.has("skip_local") {
-		b, err := args.Bool("skip_local")
-		if err != nil {
+		if skipLocal, err = args.Bool("skip_local"); err != nil {
 			return nil, err
 		}
-		skipLocal = b
-	}
-	if args.has("max_depth") {
-		d, err := args.Int("max_depth")
-		if err != nil {
-			return nil, err
-		}
-		// API.md's values are the powers of two up to 512; each doubling past
-		// a failed depth builds a board of (2d+1)² nodes on the event loop.
-		if d < 1 || d > 512 {
-			return nil, badArg("max_depth", "must be between 1 and 512")
-		}
-		maxDepth = int16(d)
 	}
 	// generateLongPath sizes its first board from the distance, so a zero
 	// distance gives depth 0, which doubles to 0 forever (accessors.go:584-597).
@@ -275,7 +283,7 @@ func calculatePath(c *client, args fnArgs, sx, sz, x, z int16) (any, error) {
 		return nil, badArg("x", "the path would start where it ends")
 	}
 
-	_, coords := c.generateLongPath(sx, sz, x, z, depth, skipLocal, maxDepth)
+	_, coords := c.generateLongPath(sx, sz, x, z, int16(depth), skipLocal, int16(maxDepth))
 	if coords == nil {
 		return nil, nil
 	}
@@ -292,28 +300,29 @@ func goneError(ref string) error {
 	return &apiError{status: http.StatusGone, code: "entity_gone", message: ref + " is no longer there", extra: map[string]any{"ref": ref}}
 }
 
-// parseObjectRef reads "object/<id>@<x>,<z>". Only the canonical spelling is
-// accepted, so a ref round-trips exactly.
+// scanRef reads ref by format, whose only verbs are %d, into fields. Only the
+// canonical spelling is accepted: the ref must print back exactly as given,
+// which rules out the signs, spaces, leading zeros and trailing text that
+// Sscanf alone would let through, so a ref round-trips exactly.
+func scanRef(ref, format string, fields ...*int) bool {
+	scan := make([]any, len(fields))
+	for i, f := range fields {
+		scan[i] = f
+	}
+	if _, err := fmt.Sscanf(ref, format, scan...); err != nil {
+		return false
+	}
+	values := make([]any, len(fields))
+	for i, f := range fields {
+		values[i] = *f
+	}
+	return fmt.Sprintf(format, values...) == ref
+}
+
+// parseObjectRef reads "object/<id>@<x>,<z>".
 func parseObjectRef(arg, ref string) (id, x, z int, err error) {
-	bad := badArg(arg, "is not an object ref (object/<id>@<x>,<z>)")
-	rest, ok := strings.CutPrefix(ref, "object/")
-	if !ok {
-		return 0, 0, 0, bad
-	}
-	idPart, at, ok := strings.Cut(rest, "@")
-	if !ok {
-		return 0, 0, 0, bad
-	}
-	xPart, zPart, ok := strings.Cut(at, ",")
-	if !ok {
-		return 0, 0, 0, bad
-	}
-	var errs [3]error
-	id, errs[0] = strconv.Atoi(idPart)
-	x, errs[1] = strconv.Atoi(xPart)
-	z, errs[2] = strconv.Atoi(zPart)
-	if errors.Join(errs[:]...) != nil || fmt.Sprintf("object/%d@%d,%d", id, x, z) != ref {
-		return 0, 0, 0, bad
+	if !scanRef(ref, "object/%d@%d,%d", &id, &x, &z) {
+		return 0, 0, 0, badArg(arg, "is not an object ref (object/<id>@<x>,<z>)")
 	}
 	return id, x, z, nil
 }
@@ -338,33 +347,10 @@ func objectArg(c *client, args fnArgs, name string) (*object, error) {
 }
 
 // parseWallObjectRef reads "wall/<id>@<x>,<z>:<dir>". A tile can hold one wall
-// object per edge, so the direction is part of the key. Only the canonical
-// spelling is accepted, so a ref round-trips exactly.
+// object per edge, so the direction is part of the key.
 func parseWallObjectRef(arg, ref string) (id, x, z, dir int, err error) {
-	bad := badArg(arg, "is not a wall object ref (wall/<id>@<x>,<z>:<dir>)")
-	rest, ok := strings.CutPrefix(ref, "wall/")
-	if !ok {
-		return 0, 0, 0, 0, bad
-	}
-	idPart, at, ok := strings.Cut(rest, "@")
-	if !ok {
-		return 0, 0, 0, 0, bad
-	}
-	coords, dirPart, ok := strings.Cut(at, ":")
-	if !ok {
-		return 0, 0, 0, 0, bad
-	}
-	xPart, zPart, ok := strings.Cut(coords, ",")
-	if !ok {
-		return 0, 0, 0, 0, bad
-	}
-	var errs [4]error
-	id, errs[0] = strconv.Atoi(idPart)
-	x, errs[1] = strconv.Atoi(xPart)
-	z, errs[2] = strconv.Atoi(zPart)
-	dir, errs[3] = strconv.Atoi(dirPart)
-	if errors.Join(errs[:]...) != nil || fmt.Sprintf("wall/%d@%d,%d:%d", id, x, z, dir) != ref {
-		return 0, 0, 0, 0, bad
+	if !scanRef(ref, "wall/%d@%d,%d:%d", &id, &x, &z, &dir) {
+		return 0, 0, 0, 0, badArg(arg, "is not a wall object ref (wall/<id>@<x>,<z>:<dir>)")
 	}
 	return id, x, z, dir, nil
 }
@@ -393,23 +379,10 @@ func wallObjectArg(c *client, args fnArgs, name string) (*wallObject, error) {
 }
 
 // parseNPCRef reads "npc/<index>:id=<id>", where index is the NPC's server
-// index (a slot the server reuses) and id its type. Only the canonical
-// spelling is accepted, so a ref round-trips exactly.
+// index (a slot the server reuses) and id its type.
 func parseNPCRef(arg, ref string) (index, id int, err error) {
-	bad := badArg(arg, "is not an npc ref (npc/<index>:id=<id>)")
-	rest, ok := strings.CutPrefix(ref, "npc/")
-	if !ok {
-		return 0, 0, bad
-	}
-	indexPart, idPart, ok := strings.Cut(rest, ":id=")
-	if !ok {
-		return 0, 0, bad
-	}
-	var errs [2]error
-	index, errs[0] = strconv.Atoi(indexPart)
-	id, errs[1] = strconv.Atoi(idPart)
-	if errors.Join(errs[:]...) != nil || fmt.Sprintf("npc/%d:id=%d", index, id) != ref {
-		return 0, 0, bad
+	if !scanRef(ref, "npc/%d:id=%d", &index, &id) {
+		return 0, 0, badArg(arg, "is not an npc ref (npc/<index>:id=<id>)")
 	}
 	return index, id, nil
 }
